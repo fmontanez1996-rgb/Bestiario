@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Crónicas del Reino</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="torch torch-left" aria-hidden="true"></div>
+    <div class="torch torch-right" aria-hidden="true"></div>
+
+    <div class="layout">
+      <aside class="sidebar" aria-label="Menú principal">
+        <h1 class="logo">Crónicas del Reino</h1>
+        <nav class="menu">
+          <button class="menu-btn active" data-target="personajes">Personajes</button>
+          <button class="menu-btn" data-target="batallas">Batallas</button>
+          <button class="menu-btn" data-target="historia">Historia</button>
+        </nav>
+      </aside>
+
+      <main class="content" aria-live="polite">
+        <section id="personajes" class="panel active">
+          <h2>Personajes</h2>
+          <p>
+            Conoce a los héroes y villanos del reino: caballeros juramentados,
+            sabios alquimistas y monarcas que disputan el trono.
+          </p>
+        </section>
+
+        <section id="batallas" class="panel">
+          <h2>Batallas</h2>
+          <p>
+            Revive los enfrentamientos decisivos en los valles de piedra y
+            fortalezas olvidadas, donde el acero y la estrategia marcaron el destino.
+          </p>
+        </section>
+
+        <section id="historia" class="panel">
+          <h2>Historia</h2>
+          <p>
+            Descubre la crónica ancestral del reino: pactos antiguos,
+            traiciones dinásticas y leyendas escritas a fuego.
+          </p>
+        </section>
+      </main>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
