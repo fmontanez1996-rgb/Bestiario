@@ -27,6 +27,74 @@
             Conoce a los héroes y villanos del reino: caballeros juramentados,
             sabios alquimistas y monarcas que disputan el trono.
           </p>
+
+          <button id="toggle-character-form" class="add-character-btn" type="button">Agregar personaje</button>
+
+          <div id="character-creator" class="character-creator" hidden>
+            <form id="character-form" class="character-form">
+              <label>Nombre
+                <input type="text" name="nombre" required />
+              </label>
+
+              <label>Historia del personaje
+                <textarea name="historia" rows="5" required></textarea>
+              </label>
+
+              <label>Tipo
+                <input type="text" name="tipo" required />
+              </label>
+
+              <label>Clan
+                <input type="text" name="clan" required />
+              </label>
+
+              <div class="stats-grid">
+                <label>Magia
+                  <input type="number" name="magia" min="1" max="100" value="50" required />
+                </label>
+                <label>Inteligencia
+                  <input type="number" name="inteligencia" min="1" max="100" value="50" required />
+                </label>
+                <label>Velocidad
+                  <input type="number" name="velocidad" min="1" max="100" value="50" required />
+                </label>
+                <label>Fuerza
+                  <input type="number" name="fuerza" min="1" max="100" value="50" required />
+                </label>
+              </div>
+
+              <label>URL de imagen de perfil
+                <input type="url" name="imagenUrl" placeholder="https://ejemplo.com/imagen.jpg" />
+              </label>
+
+              <label>O sube un archivo desde tu dispositivo
+                <input type="file" name="imagenArchivo" accept="image/*" />
+              </label>
+            </form>
+
+            <aside class="preview-pane" aria-live="polite">
+              <h3>Vista previa de tarjeta</h3>
+              <article class="character-card" id="character-preview-card">
+                <header class="character-card-header" id="preview-name">Nombre del personaje</header>
+                <img
+                  id="preview-image"
+                  class="character-card-image"
+                  src="https://images.unsplash.com/photo-1526392587392-d1627b49a74d?auto=format&fit=crop&w=900&q=80"
+                  alt="Vista previa del personaje"
+                />
+                <footer class="character-card-footer">
+                  <ul class="stats-list">
+                    <li><strong>Fuerza:</strong> <span id="preview-fuerza">50</span></li>
+                    <li><strong>Magia:</strong> <span id="preview-magia">50</span></li>
+                    <li><strong>Inteligencia:</strong> <span id="preview-inteligencia">50</span></li>
+                    <li><strong>Velocidad:</strong> <span id="preview-velocidad">50</span></li>
+                  </ul>
+                  <p class="meta"><strong>Tipo:</strong> <span id="preview-tipo">-</span></p>
+                  <p class="meta"><strong>Clan:</strong> <span id="preview-clan">-</span></p>
+                </footer>
+              </article>
+            </aside>
+          </div>
         </section>
 
         <section id="batallas" class="panel">
