@@ -1,3 +1,18 @@
+const firebaseConfig = {
+  apiKey: 'AIzaSyCBeFZHDdt2av9I4d0EN_fFSugZ7f9prKQ',
+  authDomain: 'bestiario-9a59a.firebaseapp.com',
+  databaseURL: 'https://bestiario-9a59a-default-rtdb.firebaseio.com',
+  projectId: 'bestiario-9a59a',
+  storageBucket: 'bestiario-9a59a.firebasestorage.app',
+  messagingSenderId: '877990974200',
+  appId: '1:877990974200:web:f94f40c25ea9c7fb52210d',
+  measurementId: 'G-V3TK3ZS1VQ',
+};
+
+const firebaseApp = firebase.initializeApp(firebaseConfig);
+const database = firebaseApp.database();
+const charactersRef = database.ref('characters');
+
 const buttons = document.querySelectorAll('.menu-btn');
 const panels = document.querySelectorAll('.panel');
 const personajesPanel = document.querySelector('#personajes');
@@ -74,9 +89,12 @@ const characterTypeColors = Object.fromEntries(
 );
 
 const storageKey = 'cronicas-personajes';
-let characters = JSON.parse(localStorage.getItem(storageKey) || '[]');
+const migrationKey = 'cronicas-personajes-firebase-migrated';
+const localCharacters = JSON.parse(localStorage.getItem(storageKey) || '[]');
+let characters = [];
 let filePreview = '';
 let activeProfileId = null;
+let hasReceivedFirebaseData = false;
 
 buttons.forEach((button) => {
   button.addEventListener('click', () => {
@@ -91,8 +109,61 @@ buttons.forEach((button) => {
   });
 });
 
-function saveCharacters() {
-  localStorage.setItem(storageKey, JSON.stringify(characters));
+function getCharacterRef(characterId) {
+  return database.ref(`characters/${characterId}`);
+}
+
+function getTimestamp() {
+  return new Date().toISOString();
+}
+
+function setSyncStatus(message, type = 'loading') {
+  const status = document.querySelector('.firebase-status');
+  if (!status) {
+    return;
+  }
+
+  status.textContent = message;
+  status.dataset.status = type;
+}
+
+function normalizeCharacter(character, fallbackId) {
+  const now = getTimestamp();
+
+  return {
+    id: character.id || fallbackId || crypto.randomUUID(),
+    name: character.name || '',
+    type: character.type || '',
+    clan: character.clan || '',
+    magic: character.magic || '',
+    strength: character.strength || '',
+    intelligence: character.intelligence || '',
+    speed: character.speed || '',
+    story: character.story || '',
+    image: character.image || '',
+    createdAt: character.createdAt || now,
+    updatedAt: character.updatedAt || now,
+  };
+}
+
+async function saveCharacter(character) {
+  const timestamp = getTimestamp();
+  const characterToSave = normalizeCharacter({
+    ...character,
+    createdAt: character.createdAt || timestamp,
+    updatedAt: timestamp,
+  });
+
+  await getCharacterRef(characterToSave.id).set(characterToSave);
+}
+
+async function migrateLocalCharacters() {
+  if (localStorage.getItem(migrationKey) === 'true' || !localCharacters.length || characters.length) {
+    return;
+  }
+
+  await Promise.all(localCharacters.map((character) => saveCharacter(normalizeCharacter(character))));
+  localStorage.setItem(migrationKey, 'true');
 }
 
 function createOption(value, text) {
@@ -331,29 +402,33 @@ function renderProfile(character) {
     reader.addEventListener('load', () => updateProfileImagePreview(reader.result));
     reader.readAsDataURL(file);
   });
-  document.querySelector('.profile-form').addEventListener('submit', (event) => {
+  document.querySelector('.profile-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     const profileImage = document.querySelector('#profile-image-current').value.trim();
-    characters = characters.map((entry) => (
-      entry.id === activeProfileId
-        ? {
-          ...entry,
-          name: formData.get('name').trim(),
-          type: formData.get('type'),
-          clan: formData.get('clan'),
-          magic: formData.get('magic'),
-          strength: formData.get('strength'),
-          intelligence: formData.get('intelligence'),
-          speed: formData.get('speed'),
-          story: formData.get('story').trim(),
-          image: profileImage || formData.get('imageUrl').trim(),
-        }
-        : entry
-    ));
-    saveCharacters();
-    renderGallery();
-    closeProfile();
+    const characterToUpdate = characters.find((entry) => entry.id === activeProfileId);
+    if (!characterToUpdate) {
+      return;
+    }
+
+    try {
+      await saveCharacter({
+        ...characterToUpdate,
+        name: formData.get('name').trim(),
+        type: formData.get('type'),
+        clan: formData.get('clan'),
+        magic: formData.get('magic'),
+        strength: formData.get('strength'),
+        intelligence: formData.get('intelligence'),
+        speed: formData.get('speed'),
+        story: formData.get('story').trim(),
+        image: profileImage || formData.get('imageUrl').trim(),
+      });
+      closeProfile();
+    } catch (error) {
+      console.error('No se pudo guardar el personaje en Firebase:', error);
+      setSyncStatus('No se pudieron guardar los cambios. Revisa la conexión o las reglas de Firebase.', 'error');
+    }
   });
 }
 
@@ -418,6 +493,7 @@ function createCharacterForm() {
   personajesPanel.insertAdjacentHTML(
     'beforeend',
     `
+      <p class="firebase-status" data-status="loading">Conectando con Firebase...</p>
       <div class="character-creator hidden" aria-label="Formulario para crear personaje">
         <form class="character-form">
           <button class="close-character-form" type="button" aria-label="Cerrar formulario">×</button>
@@ -524,7 +600,7 @@ function createCharacterForm() {
     }
   });
 
-  document.querySelector('.character-form').addEventListener('submit', (event) => {
+  document.querySelector('.character-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     const character = {
@@ -540,10 +616,13 @@ function createCharacterForm() {
       image: filePreview || formData.get('imageUrl').trim(),
     };
 
-    characters = [character, ...characters];
-    saveCharacters();
-    renderGallery();
-    closeForm();
+    try {
+      await saveCharacter(character);
+      closeForm();
+    } catch (error) {
+      console.error('No se pudo guardar el personaje en Firebase:', error);
+      setSyncStatus('No se pudo guardar el personaje. Revisa la conexión o las reglas de Firebase.', 'error');
+    }
   });
 }
 
@@ -551,3 +630,34 @@ addCharacterButton.textContent = 'Crear personaje';
 addCharacterButton.addEventListener('click', openForm);
 createCharacterForm();
 renderGallery();
+setSyncStatus('Conectando con Firebase...', 'loading');
+
+charactersRef.on(
+  'value',
+  async (snapshot) => {
+    const data = snapshot.val() || {};
+    characters = Object.entries(data)
+      .map(([id, character]) => normalizeCharacter(character, id))
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    hasReceivedFirebaseData = true;
+    renderGallery();
+    setSyncStatus('Personajes sincronizados con Firebase y visibles en otros dispositivos.', 'success');
+
+    try {
+      await migrateLocalCharacters();
+    } catch (error) {
+      console.error('No se pudieron migrar personajes locales a Firebase:', error);
+      setSyncStatus('Firebase está conectado, pero no se pudieron migrar personajes locales anteriores.', 'error');
+    }
+  },
+  (error) => {
+    console.error('No se pudo leer Firebase:', error);
+    setSyncStatus('No se pudo conectar con Firebase. Revisa la conexión o las reglas de la base de datos.', 'error');
+
+    if (!hasReceivedFirebaseData && localCharacters.length) {
+      characters = localCharacters.map((character) => normalizeCharacter(character));
+      renderGallery();
+    }
+  },
+);
