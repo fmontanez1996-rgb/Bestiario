@@ -76,6 +76,7 @@ const characterTypeColors = Object.fromEntries(
 const storageKey = 'cronicas-personajes';
 let characters = JSON.parse(localStorage.getItem(storageKey) || '[]');
 let filePreview = '';
+let activeProfileId = null;
 
 buttons.forEach((button) => {
   button.addEventListener('click', () => {
@@ -171,21 +172,21 @@ function renderCharacterCard(character) {
     : '<div class="character-card-image placeholder-image">Sin imagen</div>';
 
   return `
-    <article class="character-card" style="${getTypeColorStyles(character.type)}">
-      <div class="character-card-header">${safeName}</div>
+    <button class="character-card" type="button" data-character-id="${escapeHtml(character.id)}" style="${getTypeColorStyles(character.type)}" aria-label="Abrir perfil de ${safeName}">
+      <span class="character-card-header">${safeName}</span>
       ${imageMarkup}
-      <div class="character-card-footer">
-        <p class="meta"><strong>Tipo:</strong> <span class="character-type-pill">${escapeHtml(character.type)}</span></p>
-        <p class="meta"><strong>Clan:</strong> ${escapeHtml(character.clan)}</p>
-        <ul class="stats-list" aria-label="Atributos de ${safeName}">
-          <li>Magia: ${escapeHtml(character.magic)}</li>
-          <li>Fuerza: ${escapeHtml(character.strength)}</li>
-          <li>Inteligencia: ${escapeHtml(character.intelligence)}</li>
-          <li>Velocidad: ${escapeHtml(character.speed)}</li>
-        </ul>
-        <p class="character-story">${escapeHtml(character.story)}</p>
-      </div>
-    </article>
+      <span class="character-card-footer">
+        <span class="meta"><strong>Tipo:</strong> <span class="character-type-pill">${escapeHtml(character.type)}</span></span>
+        <span class="meta"><strong>Clan:</strong> ${escapeHtml(character.clan)}</span>
+        <span class="stats-list" aria-label="Atributos de ${safeName}">
+          <span>Magia: ${escapeHtml(character.magic)}</span>
+          <span>Fuerza: ${escapeHtml(character.strength)}</span>
+          <span>Inteligencia: ${escapeHtml(character.intelligence)}</span>
+          <span>Velocidad: ${escapeHtml(character.speed)}</span>
+        </span>
+        <span class="character-card-cta">Ver perfil y editar</span>
+      </span>
+    </button>
   `;
 }
 
@@ -194,6 +195,173 @@ function renderGallery() {
   gallery.innerHTML = characters.length
     ? characters.map(renderCharacterCard).join('')
     : '<p class="empty-gallery">Todavía no hay personajes guardados.</p>';
+}
+
+function closeProfile() {
+  activeProfileId = null;
+  document.querySelector('.character-profile').classList.add('hidden');
+  document.querySelector('.character-gallery').classList.remove('hidden');
+  addCharacterButton.classList.remove('hidden');
+}
+
+function updateProfileClanOptions(selectedClan = '') {
+  const typeSelect = document.querySelector('#profile-character-type');
+  const clanSelect = document.querySelector('#profile-character-clan');
+  const selectedType = characterTypes.find((entry) => entry.type === typeSelect.value);
+
+  clanSelect.innerHTML = '';
+  if (!selectedType) {
+    clanSelect.append(createOption('', 'Selecciona primero un tipo'));
+    clanSelect.disabled = true;
+    return;
+  }
+
+  clanSelect.disabled = false;
+  clanSelect.append(createOption('', 'Selecciona un clan'));
+  selectedType.clans.forEach((clan) => clanSelect.append(createOption(clan, clan)));
+  clanSelect.value = selectedClan;
+}
+
+function updateProfileImagePreview(imageSource) {
+  const preview = document.querySelector('#profile-image-preview');
+  const currentImageInput = document.querySelector('#profile-image-current');
+
+  currentImageInput.value = imageSource;
+  preview.src = imageSource;
+  preview.classList.toggle('hidden', !imageSource);
+}
+
+function renderProfile(character) {
+  const profile = document.querySelector('.character-profile');
+  const imagePreview = character.image
+    ? `<img id="profile-image-preview" class="preview-image" src="${escapeHtml(character.image)}" alt="Imagen actual de ${escapeHtml(character.name)}">`
+    : '<img id="profile-image-preview" class="preview-image hidden" alt="Imagen actual del personaje">';
+
+  activeProfileId = character.id;
+  profile.innerHTML = `
+    <button class="back-to-gallery-btn" type="button">← Volver a personajes</button>
+    <form class="profile-form" style="${getTypeColorStyles(character.type)}">
+      <div class="profile-heading">
+        <div>
+          <p class="profile-kicker">Perfil del personaje</p>
+          <h2>${escapeHtml(character.name)}</h2>
+        </div>
+        <span class="character-type-pill">${escapeHtml(character.type)}</span>
+      </div>
+      <div class="profile-grid">
+        <div class="profile-fields">
+          <label>
+            Nombre del personaje
+            <input name="name" type="text" required value="${escapeHtml(character.name)}">
+          </label>
+          <label>
+            Tipo
+            <select id="profile-character-type" name="type" required></select>
+          </label>
+          <label>
+            Clan
+            <select id="profile-character-clan" name="clan" required></select>
+          </label>
+          <div class="stats-grid">
+            <label>
+              Puntos de magia
+              <input name="magic" type="number" min="1" max="100" required value="${escapeHtml(character.magic)}">
+            </label>
+            <label>
+              Puntos de fuerza
+              <input name="strength" type="number" min="1" max="100" required value="${escapeHtml(character.strength)}">
+            </label>
+            <label>
+              Puntos de inteligencia
+              <input name="intelligence" type="number" min="1" max="100" required value="${escapeHtml(character.intelligence)}">
+            </label>
+            <label>
+              Puntos de velocidad
+              <input name="speed" type="number" min="1" max="100" required value="${escapeHtml(character.speed)}">
+            </label>
+          </div>
+          <label>
+            Historia del personaje
+            <textarea name="story" rows="8" required>${escapeHtml(character.story)}</textarea>
+          </label>
+        </div>
+        <aside class="profile-image-panel" aria-label="Imagen del personaje">
+          ${imagePreview}
+          <input id="profile-image-current" type="hidden" value="${escapeHtml(character.image)}">
+          <label>
+            URL de imagen de perfil
+            <input id="profile-character-image-url" name="imageUrl" type="url" value="${character.image && !character.image.startsWith('data:') ? escapeHtml(character.image) : ''}" placeholder="https://ejemplo.com/imagen.jpg">
+          </label>
+          <label>
+            Reemplazar con imagen del dispositivo
+            <input id="profile-character-image-file" name="imageFile" type="file" accept="image/*">
+          </label>
+        </aside>
+      </div>
+      <div class="form-actions">
+        <button class="cancel-character-btn" type="button">Cancelar</button>
+        <button class="save-character-btn" type="submit">Guardar cambios</button>
+      </div>
+    </form>
+  `;
+
+  document.querySelector('.character-gallery').classList.add('hidden');
+  document.querySelector('.character-creator').classList.add('hidden');
+  addCharacterButton.classList.add('hidden');
+  profile.classList.remove('hidden');
+
+  const profileTypeSelect = document.querySelector('#profile-character-type');
+  characterTypes.forEach((entry) => profileTypeSelect.append(createOption(entry.type, entry.type)));
+  profileTypeSelect.value = character.type;
+  updateProfileClanOptions(character.clan);
+  profileTypeSelect.addEventListener('change', () => updateProfileClanOptions());
+
+  document.querySelector('.back-to-gallery-btn').addEventListener('click', closeProfile);
+  document.querySelector('.profile-form .cancel-character-btn').addEventListener('click', closeProfile);
+  document.querySelector('#profile-character-image-url').addEventListener('input', (event) => {
+    updateProfileImagePreview(event.target.value.trim());
+  });
+  document.querySelector('#profile-character-image-file').addEventListener('change', (event) => {
+    const [file] = event.target.files;
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.addEventListener('load', () => updateProfileImagePreview(reader.result));
+    reader.readAsDataURL(file);
+  });
+  document.querySelector('.profile-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const profileImage = document.querySelector('#profile-image-current').value.trim();
+    characters = characters.map((entry) => (
+      entry.id === activeProfileId
+        ? {
+          ...entry,
+          name: formData.get('name').trim(),
+          type: formData.get('type'),
+          clan: formData.get('clan'),
+          magic: formData.get('magic'),
+          strength: formData.get('strength'),
+          intelligence: formData.get('intelligence'),
+          speed: formData.get('speed'),
+          story: formData.get('story').trim(),
+          image: profileImage || formData.get('imageUrl').trim(),
+        }
+        : entry
+    ));
+    saveCharacters();
+    renderGallery();
+    closeProfile();
+  });
+}
+
+function openProfile(characterId) {
+  const character = characters.find((entry) => entry.id === characterId);
+  if (character) {
+    renderProfile(character);
+  }
 }
 
 function updateClanOptions() {
@@ -322,6 +490,7 @@ function createCharacterForm() {
         </aside>
       </div>
       <section class="character-gallery" aria-label="Galería de personajes"></section>
+      <section class="character-profile hidden" aria-label="Perfil del personaje"></section>
     `,
   );
 
@@ -348,6 +517,13 @@ function createCharacterForm() {
 
   document.querySelector('.cancel-character-btn').addEventListener('click', closeForm);
   document.querySelector('.close-character-form').addEventListener('click', closeForm);
+  document.querySelector('.character-gallery').addEventListener('click', (event) => {
+    const card = event.target.closest('.character-card');
+    if (card) {
+      openProfile(card.dataset.characterId);
+    }
+  });
+
   document.querySelector('.character-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
