@@ -70,6 +70,8 @@ const CLANES_POR_TIPO = {
 const toggleFormBtn = document.getElementById('toggle-character-form');
 const characterCreator = document.getElementById('character-creator');
 const characterForm = document.getElementById('character-form');
+const closeFormBtn = document.getElementById('close-character-form');
+const characterGallery = document.getElementById('character-gallery');
 const tipoSelector = document.getElementById('tipo-selector');
 const clanSelector = document.getElementById('clan-selector');
 
@@ -83,6 +85,39 @@ const previewTipo = document.getElementById('preview-tipo');
 const previewClan = document.getElementById('preview-clan');
 
 const defaultImage = previewImage.src;
+
+const closeCharacterForm = () => {
+  characterCreator.setAttribute('hidden', '');
+  toggleFormBtn.textContent = 'Agregar personaje';
+};
+
+const openCharacterForm = () => {
+  characterCreator.removeAttribute('hidden');
+  toggleFormBtn.textContent = 'Ocultar formulario';
+  updatePreview();
+};
+
+const createCharacterCard = (character) => {
+  const article = document.createElement('article');
+  article.className = 'character-card';
+
+  article.innerHTML = `
+    <header class="character-card-header">${character.nombre}</header>
+    <img class="character-card-image" src="${character.imagen}" alt="Retrato de ${character.nombre}" />
+    <footer class="character-card-footer">
+      <ul class="stats-list">
+        <li><strong>Fuerza:</strong> ${character.fuerza}</li>
+        <li><strong>Magia:</strong> ${character.magia}</li>
+        <li><strong>Inteligencia:</strong> ${character.inteligencia}</li>
+        <li><strong>Velocidad:</strong> ${character.velocidad}</li>
+      </ul>
+      <p class="meta"><strong>Tipo:</strong> ${character.tipo}</p>
+      <p class="meta"><strong>Clan:</strong> ${character.clan}</p>
+    </footer>
+  `;
+
+  return article;
+};
 
 const clampScore = (value) => {
   const parsed = Number.parseInt(value, 10);
@@ -152,17 +187,15 @@ if (toggleFormBtn && characterCreator && characterForm) {
 
   toggleFormBtn.addEventListener('click', () => {
     const isHidden = characterCreator.hasAttribute('hidden');
-
     if (isHidden) {
-      characterCreator.removeAttribute('hidden');
-      toggleFormBtn.textContent = 'Ocultar formulario';
-      updatePreview();
+      openCharacterForm();
       return;
     }
 
-    characterCreator.setAttribute('hidden', '');
-    toggleFormBtn.textContent = 'Agregar personaje';
+    closeCharacterForm();
   });
+
+  closeFormBtn.addEventListener('click', closeCharacterForm);
 
   tipoSelector.addEventListener('change', () => {
     setClanOptions(tipoSelector.value);
@@ -171,4 +204,41 @@ if (toggleFormBtn && characterCreator && characterForm) {
 
   characterForm.addEventListener('input', updatePreview);
   characterForm.addEventListener('change', updatePreview);
+
+  characterForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+
+    const formData = new FormData(characterForm);
+    const imageFile = characterForm.imagenArchivo.files[0];
+    const imageUrl = formData.get('imagenUrl')?.toString().trim();
+    const characterData = {
+      nombre: formData.get('nombre')?.toString().trim() || 'Sin nombre',
+      historia: formData.get('historia')?.toString().trim() || '',
+      tipo: formData.get('tipo')?.toString().trim() || '-',
+      clan: formData.get('clan')?.toString().trim() || '-',
+      magia: clampScore(formData.get('magia')),
+      inteligencia: clampScore(formData.get('inteligencia')),
+      velocidad: clampScore(formData.get('velocidad')),
+      fuerza: clampScore(formData.get('fuerza')),
+      imagen: imageUrl || defaultImage,
+    };
+
+    const appendCard = (imageSrc) => {
+      characterData.imagen = imageSrc;
+      characterGallery.prepend(createCharacterCard(characterData));
+      characterForm.reset();
+      setClanOptions('');
+      updatePreview();
+      closeCharacterForm();
+    };
+
+    if (imageFile) {
+      const fileReader = new FileReader();
+      fileReader.onload = () => appendCard(fileReader.result);
+      fileReader.readAsDataURL(imageFile);
+      return;
+    }
+
+    appendCard(characterData.imagen);
+  });
 }

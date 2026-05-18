@@ -22,16 +22,20 @@
 
       <main class="content" aria-live="polite">
         <section id="personajes" class="panel active">
-          <h2>Personajes</h2>
+          <header class="panel-header">
+            <h2>Personajes</h2>
+            <button id="toggle-character-form" class="add-character-btn" type="button">Agregar personaje</button>
+          </header>
           <p>
             Conoce a los héroes y villanos del reino: caballeros juramentados,
             sabios alquimistas y monarcas que disputan el trono.
           </p>
 
-          <button id="toggle-character-form" class="add-character-btn" type="button">Agregar personaje</button>
+          <section id="character-gallery" class="character-gallery" aria-label="Galería de personajes"></section>
 
           <div id="character-creator" class="character-creator" hidden>
             <form id="character-form" class="character-form">
+              <button type="button" id="close-character-form" class="close-character-form" aria-label="Cerrar formulario">✕</button>
               <label>Nombre
                 <input type="text" name="nombre" required />
               </label>
@@ -74,6 +78,8 @@
               <label>O sube un archivo desde tu dispositivo
                 <input type="file" name="imagenArchivo" accept="image/*" />
               </label>
+
+              <button type="submit" class="save-character-btn">Guardar personaje</button>
             </form>
 
             <aside class="preview-pane" aria-live="polite">
