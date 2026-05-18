@@ -56,6 +56,23 @@ const characterTypes = [
   { type: 'Hijos del Vacío', clans: ['Eclipse Negro', 'La Nada Viva', 'Estrellas Muertas', 'Fin del Cosmos'] },
 ];
 
+const typeColorPalette = [
+  '#8e44ad', '#8b0000', '#b7c7d9', '#d35400', '#f1c40f',
+  '#7f8c8d', '#4b0082', '#c0392b', '#00a8cc', '#c0c0c0',
+  '#2ecc71', '#a0522d', '#dfe6e9', '#2c3e50', '#f39c12',
+  '#111111', '#3498db', '#16a085', '#6c7a89', '#34495e',
+  '#27ae60', '#7fbf3f', '#f5b041', '#5d6d7e', '#9b59b6',
+  '#d6a2e8', '#1f618d', '#95a5a6', '#00bcd4', '#e056fd',
+  '#e74c3c', '#2d3436', '#6c5ce7', '#8e5a2a', '#e84393',
+  '#c2b280', '#48c9b0', '#2f3640', '#6ab04c', '#f6b93b',
+  '#e67e22', '#00cec9', '#7f8fa6', '#7b241c', '#145a32',
+  '#ecf0f1', '#ff7675', '#ffd700', '#e17055', '#000814',
+];
+
+const characterTypeColors = Object.fromEntries(
+  characterTypes.map((entry, index) => [entry.type, typeColorPalette[index]]),
+);
+
 const storageKey = 'cronicas-personajes';
 let characters = JSON.parse(localStorage.getItem(storageKey) || '[]');
 let filePreview = '';
@@ -97,6 +114,55 @@ function escapeHtml(value) {
   });
 }
 
+function hexToRgb(hexColor) {
+  const normalizedHex = hexColor.replace('#', '');
+  const colorNumber = Number.parseInt(normalizedHex, 16);
+
+  return {
+    red: (colorNumber >> 16) & 255,
+    green: (colorNumber >> 8) & 255,
+    blue: colorNumber & 255,
+  };
+}
+
+function mixColor(hexColor, targetColor, weight) {
+  const base = hexToRgb(hexColor);
+  const target = hexToRgb(targetColor);
+  const mixed = ['red', 'green', 'blue'].map((channel) => {
+    const value = Math.round(base[channel] * (1 - weight) + target[channel] * weight);
+    return value.toString(16).padStart(2, '0');
+  });
+
+  return `#${mixed.join('')}`;
+}
+
+function getTypeColorStyles(type) {
+  const typeColor = characterTypeColors[type] || '#b4862e';
+  const typeColorDark = mixColor(typeColor, '#000000', 0.45);
+  const typeColorLight = mixColor(typeColor, '#ffffff', 0.35);
+
+  return [
+    `--type-color: ${typeColor}`,
+    `--type-color-dark: ${typeColorDark}`,
+    `--type-color-light: ${typeColorLight}`,
+  ].join('; ');
+}
+
+function updateTypeColorPreview() {
+  const typeSelect = document.querySelector('#character-type');
+  const colorPreview = document.querySelector('.type-color-preview');
+  const selectedColor = characterTypeColors[typeSelect.value];
+
+  if (!selectedColor) {
+    colorPreview.style.cssText = '';
+    colorPreview.textContent = 'Selecciona un tipo para ver su color asignado.';
+    return;
+  }
+
+  colorPreview.style.cssText = getTypeColorStyles(typeSelect.value);
+  colorPreview.innerHTML = `Color asignado: <strong>${typeSelect.value}</strong>`;
+}
+
 function renderCharacterCard(character) {
   const safeName = escapeHtml(character.name);
   const safeImage = escapeHtml(character.image);
@@ -105,11 +171,11 @@ function renderCharacterCard(character) {
     : '<div class="character-card-image placeholder-image">Sin imagen</div>';
 
   return `
-    <article class="character-card">
+    <article class="character-card" style="${getTypeColorStyles(character.type)}">
       <div class="character-card-header">${safeName}</div>
       ${imageMarkup}
       <div class="character-card-footer">
-        <p class="meta"><strong>Tipo:</strong> ${escapeHtml(character.type)}</p>
+        <p class="meta"><strong>Tipo:</strong> <span class="character-type-pill">${escapeHtml(character.type)}</span></p>
         <p class="meta"><strong>Clan:</strong> ${escapeHtml(character.clan)}</p>
         <ul class="stats-list" aria-label="Atributos de ${safeName}">
           <li>Magia: ${escapeHtml(character.magic)}</li>
@@ -135,6 +201,7 @@ function updateClanOptions() {
   const clanSelect = document.querySelector('#character-clan');
   const selectedType = characterTypes.find((entry) => entry.type === typeSelect.value);
 
+  updateTypeColorPreview();
   clanSelect.innerHTML = '';
   if (!selectedType) {
     clanSelect.append(createOption('', 'Selecciona primero un tipo'));
@@ -197,6 +264,7 @@ function createCharacterForm() {
               <option value="">Selecciona un tipo</option>
             </select>
           </label>
+          <div class="type-color-preview" aria-live="polite">Selecciona un tipo para ver su color asignado.</div>
           <label>
             Clan
             <select id="character-clan" name="clan" required disabled>
