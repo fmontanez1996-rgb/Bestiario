@@ -253,7 +253,8 @@ body::before {
 }
 
 .character-form input,
-.character-form textarea {
+.character-form textarea,
+.character-form select {
   width: 100%;
   border: 1px solid rgba(224, 183, 98, 0.6);
   background: rgba(12, 10, 8, 0.55);
@@ -324,4 +325,29 @@ body::before {
   .character-creator {
     grid-template-columns: 1fr;
   }
+}
+
+
+.character-form select {
+  cursor: pointer;
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #e8c77f 50%),
+    linear-gradient(135deg, #e8c77f 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) calc(50% - 3px),
+    calc(100% - 12px) calc(50% - 3px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 2.2rem;
+}
+
+.character-form select:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.character-form select option {
+  background: #1d1711;
+  color: var(--text-ivory);
 }
