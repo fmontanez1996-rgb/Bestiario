@@ -88,12 +88,10 @@ const defaultImage = previewImage.src;
 
 const closeCharacterForm = () => {
   characterCreator.setAttribute('hidden', '');
-  toggleFormBtn.textContent = 'Agregar personaje';
 };
 
 const openCharacterForm = () => {
   characterCreator.removeAttribute('hidden');
-  toggleFormBtn.textContent = 'Ocultar formulario';
   updatePreview();
 };
 
@@ -185,15 +183,7 @@ const updatePreview = () => {
 if (toggleFormBtn && characterCreator && characterForm) {
   setupSelectors();
 
-  toggleFormBtn.addEventListener('click', () => {
-    const isHidden = characterCreator.hasAttribute('hidden');
-    if (isHidden) {
-      openCharacterForm();
-      return;
-    }
-
-    closeCharacterForm();
-  });
+  toggleFormBtn.addEventListener('click', openCharacterForm);
 
   closeFormBtn.addEventListener('click', closeCharacterForm);
 
