@@ -21,6 +21,7 @@ const battleChallengesRef = database.ref('battleChallenges');
 const battleSessionsRef = database.ref('battleSessions');
 const battleHistoryRef = database.ref('battleHistory');
 const battleOutcomeMarkersRef = database.ref('battleOutcomeMarkers');
+const historyTypesRef = database.ref('historyTypes');
 
 const buttons = document.querySelectorAll('.menu-btn');
 const panels = document.querySelectorAll('.panel');
@@ -54,6 +55,8 @@ const battleSurrenderVictoryModal = document.querySelector('#battle-surrender-vi
 const battleSurrenderVictoryText = document.querySelector('#battle-surrender-victory-text');
 const battleSurrenderVictoryCloseButton = document.querySelector('#battle-surrender-victory-close-btn');
 const battleHistoryList = document.querySelector('#battle-history-list');
+const historyTypesList = document.querySelector('#history-types-list');
+const historyClansList = document.querySelector('#history-clans-list');
 
 const characterTypes = [
   { type: 'Brujas', clans: ['Luna Carmesí', 'Hijas del Caldero', 'Las Espinas Negras', 'Coven Eclipse'] },
@@ -150,6 +153,67 @@ let pendingAttack = null;
 let battleHistoryByOpponent = {};
 const shownSurrenderVictoryBySessionId = new Set();
 const previousBattleStatusBySessionId = {};
+let historyTypesData = {};
+let selectedHistoryTypeId = '';
+
+let historyTypeContextMenuState = null;
+
+function closeHistoryTypeContextMenu() {
+  if (!historyTypeContextMenuState) return;
+  historyTypeContextMenuState.menu.remove();
+  historyTypeContextMenuState = null;
+}
+
+function openHistoryTypeContextMenu(typeId, posX, posY) {
+  closeHistoryTypeContextMenu();
+  const typeEntry = historyTypesData[typeId];
+  if (!typeEntry) return;
+
+  const menu = document.createElement('div');
+  menu.className = 'history-type-context-menu';
+  menu.innerHTML = `
+    <button type="button" data-action="edit">Editar tipo</button>
+    <button type="button" data-action="delete">Eliminar tipo</button>
+  `;
+
+  const placeMenu = () => {
+    const margin = 8;
+    const menuWidth = menu.offsetWidth;
+    const menuHeight = menu.offsetHeight;
+    const boundedX = Math.min(posX, window.innerWidth - menuWidth - margin);
+    const boundedY = Math.min(posY, window.innerHeight - menuHeight - margin);
+    menu.style.left = `${Math.max(margin, boundedX)}px`;
+    menu.style.top = `${Math.max(margin, boundedY)}px`;
+  };
+
+  menu.addEventListener('click', async (event) => {
+    const actionBtn = event.target.closest('[data-action]');
+    if (!actionBtn) return;
+
+    const action = actionBtn.dataset.action;
+    closeHistoryTypeContextMenu();
+
+    if (action === 'edit') {
+      const newName = prompt('Nuevo nombre del tipo', typeEntry.name || '');
+      if (!newName || !newName.trim()) return;
+      await historyTypesRef.child(typeId).update({ name: newName.trim() });
+      return;
+    }
+
+    if (action === 'delete') {
+      const confirmed = window.confirm(`¿Eliminar el tipo "${typeEntry.name}" y todos sus clanes asociados?`);
+      if (!confirmed) return;
+      await historyTypesRef.child(typeId).remove();
+      if (selectedHistoryTypeId === typeId) {
+        selectedHistoryTypeId = '';
+      }
+    }
+  });
+
+  document.body.append(menu);
+  placeMenu();
+  historyTypeContextMenuState = { menu, typeId };
+}
 
 buttons.forEach((button) => {
   button.addEventListener('click', () => {
@@ -331,7 +395,7 @@ function renderSharedCharacterCard(character, options = {}) {
         <span class="character-card-footer">
           <span class="character-card-tags">
             <span class="character-type-clan-tag">${escapeHtml(character.type)}</span>
-            <span class="character-type-clan-tag">${escapeHtml(character.clan)}</span>
+            ${character.clan ? `<span class="character-type-clan-tag">${escapeHtml(character.clan)}</span>` : ''}
           </span>
           <span class="stats-list" aria-label="Atributos de ${safeName}">
             <span><strong>F</strong>: ${escapeHtml(character.strength)}</span>
@@ -963,6 +1027,31 @@ function closeProfile() {
   addCharacterButton.classList.remove('hidden');
 }
 
+async function deleteCharacter(characterId) {
+  if (!characterId) {
+    return;
+  }
+
+  const character = characters.find((entry) => entry.id === characterId);
+  if (!character) {
+    return;
+  }
+
+  const shouldDelete = window.confirm(`¿Seguro que quieres eliminar a ${character.name}? Esta acción no se puede deshacer.`);
+  if (!shouldDelete) {
+    return;
+  }
+
+  try {
+    await getCharacterRef(characterId).remove();
+    setSyncStatus('Personaje eliminado correctamente.', 'success');
+    closeProfile();
+  } catch (error) {
+    console.error('No se pudo eliminar el personaje en Firebase:', error);
+    setSyncStatus('No se pudo eliminar el personaje. Revisa la conexión o las reglas de Firebase.', 'error');
+  }
+}
+
 function updateProfileClanOptions(selectedClan = '') {
   const typeSelect = document.querySelector('#profile-character-type');
   const clanSelect = document.querySelector('#profile-character-clan');
@@ -976,7 +1065,7 @@ function updateProfileClanOptions(selectedClan = '') {
   }
 
   clanSelect.disabled = false;
-  clanSelect.append(createOption('', 'Selecciona un clan'));
+  clanSelect.append(createOption('', 'Sin clan'));
   selectedType.clans.forEach((clan) => clanSelect.append(createOption(clan, clan)));
   clanSelect.value = selectedClan;
 }
@@ -1019,7 +1108,7 @@ function renderProfile(character) {
           </label>
           <label>
             Clan
-            <select id="profile-character-clan" name="clan" required></select>
+            <select id="profile-character-clan" name="clan"></select>
           </label>
           <div class="stats-grid">
             <label>
@@ -1059,6 +1148,7 @@ function renderProfile(character) {
       </div>
       <div class="form-actions">
         <button class="cancel-character-btn" type="button">Cancelar</button>
+        <button class="delete-character-btn" type="button">Eliminar</button>
         <button class="save-character-btn" type="submit">Guardar cambios</button>
       </div>
     </form>
@@ -1077,6 +1167,9 @@ function renderProfile(character) {
 
   document.querySelector('.back-to-gallery-btn').addEventListener('click', closeProfile);
   document.querySelector('.profile-form .cancel-character-btn').addEventListener('click', closeProfile);
+  document.querySelector('.profile-form .delete-character-btn').addEventListener('click', () => {
+    deleteCharacter(activeProfileId);
+  });
   document.querySelector('#profile-character-image-url').addEventListener('input', (event) => {
     updateProfileImagePreview(event.target.value.trim());
   });
@@ -1141,7 +1234,7 @@ function updateClanOptions() {
   }
 
   clanSelect.disabled = false;
-  clanSelect.append(createOption('', 'Selecciona un clan'));
+  clanSelect.append(createOption('', 'Sin clan'));
   selectedType.clans.forEach((clan) => clanSelect.append(createOption(clan, clan)));
 }
 
@@ -1237,7 +1330,7 @@ function createCharacterForm() {
           <div class="type-color-preview" aria-live="polite">Selecciona un tipo para ver su color asignado.</div>
           <label>
             Clan
-            <select id="character-clan" name="clan" required disabled>
+            <select id="character-clan" name="clan" disabled>
               <option value="">Selecciona primero un tipo</option>
             </select>
           </label>
@@ -1353,6 +1446,72 @@ function createCharacterForm() {
 }
 
 
+function normalizeHistoryTypes(rawData) {
+  if (rawData && Object.keys(rawData).length) return rawData;
+  const seeded = {};
+  characterTypes.forEach((entry) => {
+    const typeId = crypto.randomUUID();
+    seeded[typeId] = {
+      name: entry.type,
+      description: '',
+      clans: Object.fromEntries(entry.clans.map((clan) => [crypto.randomUUID(), { name: clan, story: '' }])),
+    };
+  });
+  historyTypesRef.set(seeded).catch(() => {});
+  return seeded;
+}
+
+function renderHistoryClans() {
+  if (!historyClansList) return;
+  if (!selectedHistoryTypeId) {
+    historyClansList.innerHTML = '';
+    return;
+  }
+
+  const typeEntry = historyTypesData[selectedHistoryTypeId];
+  const clans = Object.entries(typeEntry?.clans || {});
+  historyClansList.innerHTML = `
+    <div class="history-section-header">
+      <button class="cancel-character-btn" id="back-to-types-btn" type="button">← Volver al listado</button>
+      <h3>${escapeHtml(typeEntry?.name || '')}</h3>
+      <button id="add-clan-btn" class="save-character-btn" type="button">Agregar clan</button>
+    </div>
+    <article class="history-item selected">
+      <h4>Descripción del tipo</h4>
+      <textarea data-history-type-description-id="${escapeHtml(selectedHistoryTypeId)}" placeholder="Descripción del tipo">${escapeHtml(typeEntry?.description || '')}</textarea>
+      <button class="save-character-btn" data-save-type-description-id="${escapeHtml(selectedHistoryTypeId)}" type="button">Guardar descripción</button>
+    </article>
+    <h4>Clanes</h4>
+    ${clans.length ? `<ul class="history-simple-list">${clans.map(([clanId, clan]) => `<li class="history-item">
+      <p><strong>${escapeHtml(clan.name)}</strong></p>
+      <textarea data-history-clan-story-id="${escapeHtml(clanId)}" placeholder="Descripción del clan">${escapeHtml(clan.story || '')}</textarea>
+      <div class="history-inline-actions">
+        <button class="save-character-btn" data-save-clan-story-id="${escapeHtml(clanId)}" type="button">Guardar descripción</button>
+        <button class="delete-character-btn" data-delete-clan-id="${escapeHtml(clanId)}" type="button">Eliminar clan</button>
+      </div>
+    </li>`).join('')}</ul>` : '<p>Sin clanes.</p>'}
+  `;
+}
+
+function renderHistoryTypes() {
+  if (!historyTypesList) return;
+  const types = Object.entries(historyTypesData);
+
+  if (selectedHistoryTypeId) {
+    historyTypesList.innerHTML = '';
+    closeHistoryTypeContextMenu();
+    renderHistoryClans();
+    return;
+  }
+
+  historyClansList.innerHTML = '';
+  closeHistoryTypeContextMenu();
+  historyTypesList.innerHTML = types.length
+    ? `<ul class="history-simple-list">${types.map(([typeId, type]) => `<li><button class="menu-btn history-link-btn" type="button" data-history-type-id="${escapeHtml(typeId)}">${escapeHtml(type.name)}</button></li>`).join('')}</ul>`
+    : '<p>No hay tipos cargados.</p>';
+}
+
+
 async function signInWithGoogle() {
   try {
     await auth.signInWithPopup(googleProvider);
@@ -1454,6 +1613,67 @@ addCharacterButton.textContent = 'Crear personaje';
 addCharacterButton.addEventListener('click', openForm);
 randomCharacterButton.addEventListener('click', createRandomCharacters);
 createCharacterForm();
+
+historyTypesList?.addEventListener('click', async (event) => {
+  const typeBtn = event.target.closest('[data-history-type-id]');
+  if (typeBtn) {
+    selectedHistoryTypeId = typeBtn.dataset.historyTypeId;
+    renderHistoryTypes();
+  }
+});
+
+historyTypesList?.addEventListener('contextmenu', (event) => {
+  const typeBtn = event.target.closest('[data-history-type-id]');
+  if (!typeBtn) return;
+  event.preventDefault();
+  openHistoryTypeContextMenu(typeBtn.dataset.historyTypeId, event.clientX, event.clientY);
+});
+
+document.addEventListener('click', (event) => {
+  if (!historyTypeContextMenuState) return;
+  if (historyTypeContextMenuState.menu.contains(event.target)) return;
+  closeHistoryTypeContextMenu();
+});
+
+document.addEventListener('scroll', closeHistoryTypeContextMenu, true);
+window.addEventListener('resize', closeHistoryTypeContextMenu);
+
+historyClansList?.addEventListener('click', async (event) => {
+  const backBtn = event.target.closest('#back-to-types-btn');
+  const addClanBtn = event.target.closest('#add-clan-btn');
+  const saveTypeDescBtn = event.target.closest('[data-save-type-description-id]');
+  const saveStoryBtn = event.target.closest('[data-save-clan-story-id]');
+  const delClanBtn = event.target.closest('[data-delete-clan-id]');
+  const typeEntry = historyTypesData[selectedHistoryTypeId];
+  if (!typeEntry) return;
+  if (backBtn) {
+    selectedHistoryTypeId = '';
+    renderHistoryTypes();
+    return;
+  }
+  if (addClanBtn) {
+    const name = prompt('Nombre del clan');
+    if (!name) return;
+    await historyTypesRef.child(`${selectedHistoryTypeId}/clans/${crypto.randomUUID()}`).set({ name: name.trim(), story: '' });
+  }
+  if (saveTypeDescBtn) {
+    const typeId = saveTypeDescBtn.dataset.saveTypeDescriptionId;
+    const textarea = historyClansList.querySelector(`[data-history-type-description-id="${typeId}"]`);
+    await historyTypesRef.child(typeId).update({ description: textarea.value.trim() });
+  }
+  if (saveStoryBtn) {
+    const clanId = saveStoryBtn.dataset.saveClanStoryId;
+    const textarea = historyClansList.querySelector(`[data-history-clan-story-id="${clanId}"]`);
+    await historyTypesRef.child(`${selectedHistoryTypeId}/clans/${clanId}`).update({ story: textarea.value.trim() });
+  }
+  if (delClanBtn) {
+    const clanId = delClanBtn.dataset.deleteClanId;
+    const clanName = typeEntry.clans?.[clanId]?.name || '';
+    const linked = characters.some((c) => c.type === typeEntry.name && c.clan === clanName);
+    if (linked) { alert('No se puede eliminar: tiene personajes designados.'); return; }
+    await historyTypesRef.child(`${selectedHistoryTypeId}/clans/${clanId}`).remove();
+  }
+});
 renderGallery();
 renderDeckBuilder();
 renderOnlineUsers();
@@ -1469,6 +1689,12 @@ usersRef.on('value', (snapshot) => {
   users = snapshot.val() || {};
   renderOnlineUsers();
   renderBattleHistory();
+});
+
+
+historyTypesRef.on('value', (snapshot) => {
+  historyTypesData = normalizeHistoryTypes(snapshot.val() || {});
+  renderHistoryTypes();
 });
 
 battleHistoryRef.on('value', (snapshot) => {
