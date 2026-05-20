@@ -11,12 +11,49 @@ const firebaseConfig = {
 
 const firebaseApp = firebase.initializeApp(firebaseConfig);
 const database = firebaseApp.database();
+const auth = firebase.auth();
+const googleProvider = new firebase.auth.GoogleAuthProvider();
 const charactersRef = database.ref('characters');
+const userDecksRef = database.ref('userDecks');
+const usersRef = database.ref('users');
+const onlineUsersRef = database.ref('onlineUsers');
+const battleChallengesRef = database.ref('battleChallenges');
+const battleSessionsRef = database.ref('battleSessions');
+const battleHistoryRef = database.ref('battleHistory');
+const battleOutcomeMarkersRef = database.ref('battleOutcomeMarkers');
 
 const buttons = document.querySelectorAll('.menu-btn');
 const panels = document.querySelectorAll('.panel');
 const personajesPanel = document.querySelector('#personajes');
 const addCharacterButton = document.querySelector('.add-character-btn');
+const randomCharacterButton = document.querySelector('.random-character-btn');
+const loginGoogleButton = document.querySelector('#login-google-btn');
+const logoutButton = document.querySelector('#logout-btn');
+const authPanel = document.querySelector('#auth-panel');
+const authUserPanel = document.querySelector('#auth-user-panel');
+const gameLayout = document.querySelector('#game-layout');
+const userName = document.querySelector('#user-name');
+const userUid = document.querySelector('#user-uid');
+const userPhoto = document.querySelector('#user-photo');
+const battleUsersList = document.querySelector('#battle-users-list');
+const battleChallengeModal = document.querySelector('#battle-challenge-modal');
+const challengeMessage = document.querySelector('#challenge-message');
+const acceptChallengeButton = document.querySelector('#accept-challenge-btn');
+const rejectChallengeButton = document.querySelector('#reject-challenge-btn');
+const battleArenaModal = document.querySelector('#battle-arena-modal');
+const battleArenaCloseButton = document.querySelector('#battle-arena-close-btn');
+const battleTurnLabel = document.querySelector('#battle-turn-label');
+const battleHand = document.querySelector('#battle-hand');
+const battleOpponentSlots = document.querySelector('#battle-opponent-slots');
+const battlePlayerSlots = document.querySelector('#battle-player-slots');
+const battleCardActionModal = document.querySelector('#battle-card-action-modal');
+const battleActionPlaceButton = document.querySelector('#battle-action-place');
+const battleActionFaceDownButton = document.querySelector('#battle-action-facedown');
+const battleActionCancelButton = document.querySelector('#battle-action-cancel');
+const battleSurrenderVictoryModal = document.querySelector('#battle-surrender-victory-modal');
+const battleSurrenderVictoryText = document.querySelector('#battle-surrender-victory-text');
+const battleSurrenderVictoryCloseButton = document.querySelector('#battle-surrender-victory-close-btn');
+const battleHistoryList = document.querySelector('#battle-history-list');
 
 const characterTypes = [
   { type: 'Brujas', clans: ['Luna Carmesí', 'Hijas del Caldero', 'Las Espinas Negras', 'Coven Eclipse'] },
@@ -95,6 +132,24 @@ let characters = [];
 let filePreview = '';
 let activeProfileId = null;
 let hasReceivedFirebaseData = false;
+let currentUserId = null;
+let selectedDeckIds = [];
+let deckOrder = [];
+let savedDeck = { characterIds: [], mainIds: [] };
+let onlineUsers = {};
+let users = {};
+let activeChallenge = null;
+let activeBattleSession = null;
+let battleSessions = [];
+let pendingChallenges = [];
+let battleArenaDismissed = true;
+let surrenderInFlightUserId = null;
+let selectedHandCardId = null;
+let pendingPlacementMode = null;
+let pendingAttack = null;
+let battleHistoryByOpponent = {};
+const shownSurrenderVictoryBySessionId = new Set();
+const previousBattleStatusBySessionId = {};
 
 buttons.forEach((button) => {
   button.addEventListener('click', () => {
@@ -115,6 +170,14 @@ function getCharacterRef(characterId) {
 
 function getTimestamp() {
   return new Date().toISOString();
+}
+
+function getRandomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function getRandomCharacterTypeEntry() {
+  return characterTypes[getRandomInt(0, characterTypes.length - 1)];
 }
 
 function setSyncStatus(message, type = 'loading') {
@@ -235,30 +298,55 @@ function updateTypeColorPreview() {
   colorPreview.innerHTML = `Color asignado: <strong>${typeSelect.value}</strong>`;
 }
 
-function renderCharacterCard(character) {
-  const safeName = escapeHtml(character.name);
-  const safeImage = escapeHtml(character.image);
+function renderSharedCharacterCard(character, options = {}) {
+  const {
+    dataAttribute = 'data-character-id',
+    dataValue = character.id,
+    extraClasses = '',
+    ariaLabel = `Abrir perfil de ${character.name}`,
+    tagsText = `${character.type} · ${character.clan}`,
+    footerPrefix = '',
+    inlineStyle = '',
+    staticCard = false,
+  } = options;
+
+  const safeName = escapeHtml(character.name || 'Carta');
+  const safeImage = escapeHtml(character.image || '');
+  const safeDataValue = escapeHtml(dataValue || '');
   const imageMarkup = character.image
     ? `<img class="character-card-image" src="${safeImage}" alt="Imagen de ${safeName}">`
     : '<div class="character-card-image placeholder-image">Sin imagen</div>';
 
+  const tagName = staticCard ? 'div' : 'button';
+  const interactiveAttributes = staticCard
+    ? ''
+    : `type="button" ${dataAttribute}="${safeDataValue}" aria-label="${escapeHtml(ariaLabel)}"`;
+
   return `
-    <button class="character-card" type="button" data-character-id="${escapeHtml(character.id)}" style="${getTypeColorStyles(character.type)}" aria-label="Abrir perfil de ${safeName}">
-      <span class="character-card-header">${safeName}</span>
-      ${imageMarkup}
-      <span class="character-card-footer">
-        <span class="meta"><strong>Tipo:</strong> <span class="character-type-pill">${escapeHtml(character.type)}</span></span>
-        <span class="meta"><strong>Clan:</strong> ${escapeHtml(character.clan)}</span>
-        <span class="stats-list" aria-label="Atributos de ${safeName}">
-          <span>Magia: ${escapeHtml(character.magic)}</span>
-          <span>Fuerza: ${escapeHtml(character.strength)}</span>
-          <span>Inteligencia: ${escapeHtml(character.intelligence)}</span>
-          <span>Velocidad: ${escapeHtml(character.speed)}</span>
+    <${tagName} class="character-card character-gallery-card ${extraClasses}" ${interactiveAttributes} style="${getTypeColorStyles(character.type)}${inlineStyle}">
+      ${footerPrefix}
+      <span class="character-card-layout">
+        <span class="character-card-header">${safeName}</span>
+        <span class="character-card-right">${imageMarkup}</span>
+        <span class="character-card-footer">
+          <span class="character-card-tags">
+            <span class="character-type-clan-tag">${escapeHtml(character.type)}</span>
+            <span class="character-type-clan-tag">${escapeHtml(character.clan)}</span>
+          </span>
+          <span class="stats-list" aria-label="Atributos de ${safeName}">
+            <span><strong>F</strong>: ${escapeHtml(character.strength)}</span>
+            <span><strong>V</strong>: ${escapeHtml(character.speed)}</span>
+            <span><strong>M</strong>: ${escapeHtml(character.magic)}</span>
+            <span><strong>I</strong>: ${escapeHtml(character.intelligence)}</span>
+          </span>
         </span>
-        <span class="character-card-cta">Ver perfil y editar</span>
       </span>
-    </button>
+    </${tagName}>
   `;
+}
+
+function renderCharacterCard(character) {
+  return renderSharedCharacterCard(character, { extraClasses: 'character-size-personajes' });
 }
 
 function renderGallery() {
@@ -266,6 +354,606 @@ function renderGallery() {
   gallery.innerHTML = characters.length
     ? characters.map(renderCharacterCard).join('')
     : '<p class="empty-gallery">Todavía no hay personajes guardados.</p>';
+}
+
+function renderDeckBuilder() {
+  const container = document.querySelector('#deck-builder');
+  if (!container) return;
+
+  if (!currentUserId) {
+    container.innerHTML = '<p>Inicia sesión para gestionar tu mazo.</p>';
+    return;
+  }
+
+  const hasSavedDeck = savedDeck.characterIds.length === 20;
+  const hasBlockingBattle = currentUserId
+    && (battleSessions.some((session) => (session.players || []).includes(currentUserId) && session.status === 'active')
+      || pendingChallenges.some((challenge) => (
+        challenge?.status === 'pending'
+        && (challenge?.fromUid === currentUserId || challenge?.toUid === currentUserId)
+      )));
+  const canEditDeck = !hasBlockingBattle;
+  const availableCharacters = hasSavedDeck
+    ? characters.filter((character) => savedDeck.characterIds.includes(character.id))
+    : characters;
+  const selectedSet = new Set(selectedDeckIds);
+  const orderMap = new Map(deckOrder.map((id, index) => [id, index + 1]));
+  const mainSet = new Set(savedDeck.mainIds);
+
+  container.innerHTML = `
+    <p class="deck-description">
+      ${hasSavedDeck
+        ? 'Tu mazo principal está guardado. Elige 3 personajes principales.'
+        : 'Selecciona 20 personajes para tu mazo principal.'}
+    </p>
+    <div class="deck-count">${hasSavedDeck ? `Mazo guardado: ${savedDeck.characterIds.length}/20` : `Seleccionados: ${selectedDeckIds.length}/20`}</div>
+    <button id="edit-deck-btn" class="save-character-btn" type="button" ${canEditDeck ? '' : 'disabled'}>
+      Editar Mazo
+    </button>
+    ${canEditDeck ? '' : '<p class="deck-lock-note">No puedes editar el mazo mientras haya batallas pendientes o en curso.</p>'}
+    ${(!hasSavedDeck && selectedDeckIds.length === 20) ? '<button id="save-deck-btn" class="save-character-btn" type="button">Guardar Mazo</button>' : ''}
+    <section class="deck-grid">
+      ${availableCharacters.map((character) => {
+    const isSelected = selectedSet.has(character.id);
+    const order = orderMap.get(character.id);
+    const isMain = mainSet.has(character.id);
+    return `
+          ${renderSharedCharacterCard(character, {
+    dataAttribute: 'data-deck-character-id',
+    extraClasses: `deck-card character-size-compact ${isSelected ? 'is-picked' : ''} ${isMain ? 'is-main' : ''}`,
+    footerPrefix: `${order ? `<span class="pick-order">${order}</span>` : ''}${isMain ? '<span class="main-badge">Principal</span>' : ''}`,
+    ariaLabel: `Seleccionar ${character.name} para el mazo`,
+  })}
+        `;
+  }).join('')}
+    </section>
+  `;
+
+  const saveDeckBtn = document.querySelector('#save-deck-btn');
+  if (saveDeckBtn) {
+    saveDeckBtn.addEventListener('click', saveDeck);
+  }
+
+  const editDeckBtn = document.querySelector('#edit-deck-btn');
+  if (editDeckBtn) {
+    editDeckBtn.addEventListener('click', () => {
+      if (!canEditDeck) return;
+      savedDeck = { characterIds: [], mainIds: [] };
+      selectedDeckIds = [];
+      deckOrder = [];
+      renderDeckBuilder();
+    });
+  }
+}
+
+function renderOnlineUsers() {
+  if (!battleUsersList) return;
+
+  if (!currentUserId) {
+    battleUsersList.innerHTML = '<p>Inicia sesión para ver perfiles autenticados.</p>';
+    return;
+  }
+
+  const authenticatedUsers = Object.entries(users).map(([uid, entry]) => ({ uid, ...(entry || {}) })).filter((entry) => entry.uid !== currentUserId);
+  if (!authenticatedUsers.length) {
+    battleUsersList.innerHTML = '<p>No hay otros perfiles autenticados disponibles por ahora.</p>';
+    return;
+  }
+
+  battleUsersList.innerHTML = authenticatedUsers
+    .map((user) => {
+      const openBattle = getOpenBattleWithUser(user.uid);
+      const hasOpenBattle = Boolean(openBattle);
+      const isOnline = Boolean(onlineUsers[user.uid]);
+      const isSurrendering = surrenderInFlightUserId === user.uid;
+      const hasPendingOutgoingChallenge = pendingChallenges.some((challenge) => (
+        challenge?.status === 'pending'
+        && challenge?.fromUid === currentUserId
+        && challenge?.toUid === user.uid
+      ));
+      const actionLabel = hasOpenBattle ? 'Abrir Batalla' : (hasPendingOutgoingChallenge ? 'Esperando Respuesta' : 'Retar a batalla');
+      const isActionDisabled = !hasOpenBattle && hasPendingOutgoingChallenge;
+      return `
+      <article class="battle-user-card">
+        <p class="battle-user-name">${escapeHtml(user.name || 'Usuario sin nombre')}</p>
+        <p class="battle-user-status">${isOnline ? 'En línea' : 'Desconectado'}</p>
+        <div class="battle-user-actions">
+          <button class="save-character-btn challenge-user-btn" type="button" data-challenge-user-id="${escapeHtml(user.uid)}" data-challenge-user-name="${escapeHtml(user.name || 'Usuario')}" ${isActionDisabled ? 'disabled' : ''}>
+            ${actionLabel}
+          </button>
+          ${hasOpenBattle ? `<button class="cancel-character-btn surrender-battle-btn" type="button" data-surrender-user-id="${escapeHtml(user.uid)}" ${isSurrendering ? 'disabled' : ''}>${isSurrendering ? 'Procesando...' : 'Rendirse'}</button>` : ''}
+        </div>
+      </article>
+    `;
+    })
+    .join('');
+}
+
+function renderBattleHistory() {
+  if (!battleHistoryList) return;
+  if (!currentUserId) {
+    battleHistoryList.innerHTML = '<p>Inicia sesión para ver tu historial.</p>';
+    return;
+  }
+
+  const historyEntries = Object.entries(battleHistoryByOpponent)
+    .map(([opponentUid, summary]) => ({ opponentUid, ...(summary || {}) }))
+    .sort((a, b) => (b.battles || 0) - (a.battles || 0));
+
+  if (!historyEntries.length) {
+    battleHistoryList.innerHTML = '<p>Aún no tienes batallas registradas.</p>';
+    return;
+  }
+
+  battleHistoryList.innerHTML = historyEntries
+    .map((entry) => {
+      const opponent = users[entry.opponentUid] || {};
+      return `
+        <article class="battle-history-card">
+          <div>
+            <p class="battle-user-name">${escapeHtml(opponent.name || 'Usuario desconocido')}</p>
+            <p class="battle-user-status">UID: ${escapeHtml(entry.opponentUid)}</p>
+          </div>
+          <p class="battle-history-stats">
+            Batallas: <strong>${entry.battles || 0}</strong> ·
+            Victorias: <strong>${entry.wins || 0}</strong> ·
+            Derrotas: <strong>${entry.losses || 0}</strong>
+          </p>
+        </article>
+      `;
+    })
+    .join('');
+}
+
+async function surrenderBattleAgainst(targetUserId) {
+  if (surrenderInFlightUserId) return;
+  const session = getOpenBattleWithUser(targetUserId);
+  if (!session || !currentUserId) return;
+  const opponentUid = (session.players || []).find((uid) => uid !== currentUserId);
+  if (!opponentUid) return;
+
+  surrenderInFlightUserId = targetUserId;
+  renderOnlineUsers();
+  try {
+    await battleSessionsRef.child(session.id).update({
+      status: 'finished',
+      winnerUid: opponentUid,
+      loserUid: currentUserId,
+      endedAt: getTimestamp(),
+      updatedAt: getTimestamp(),
+    });
+    renderOnlineUsers();
+  } finally {
+    surrenderInFlightUserId = null;
+  }
+
+  battleArenaDismissed = false;
+  setSyncStatus('Te rendiste. La batalla fue otorgada al contrincante.', 'success');
+}
+
+function getOpenBattleWithUser(targetUserId) {
+  if (!currentUserId || !targetUserId) return null;
+  return battleSessions.find((session) => {
+    const players = getBattlePlayers(session);
+    const includesMe = players.includes(currentUserId);
+    const includesTarget = players.includes(targetUserId);
+    return includesMe && includesTarget && session.status === 'active';
+  }) || null;
+}
+
+
+
+async function registerBattleOutcome(session) {
+  if (!session?.id || session.status !== 'finished' || !session.winnerUid || !session.loserUid) return;
+
+  const markerRef = battleOutcomeMarkersRef.child(session.id);
+  const markerResult = await markerRef.transaction((currentValue) => {
+    if (currentValue) return;
+    return getTimestamp();
+  });
+
+  if (!markerResult.committed) {
+    return;
+  }
+
+  const winnerVsLoserRef = battleHistoryRef.child(session.winnerUid).child(session.loserUid);
+  const loserVsWinnerRef = battleHistoryRef.child(session.loserUid).child(session.winnerUid);
+
+  await Promise.all([
+    winnerVsLoserRef.transaction((currentValue) => ({
+      battles: (currentValue?.battles || 0) + 1,
+      wins: (currentValue?.wins || 0) + 1,
+      losses: currentValue?.losses || 0,
+      createdAt: currentValue?.createdAt || getTimestamp(),
+      updatedAt: getTimestamp(),
+    })),
+    loserVsWinnerRef.transaction((currentValue) => ({
+      battles: (currentValue?.battles || 0) + 1,
+      wins: currentValue?.wins || 0,
+      losses: (currentValue?.losses || 0) + 1,
+      createdAt: currentValue?.createdAt || getTimestamp(),
+      updatedAt: getTimestamp(),
+    })),
+    usersRef.child(session.winnerUid).child('battleSummary').transaction((currentValue) => ({
+      wins: (currentValue?.wins || 0) + 1,
+      losses: currentValue?.losses || 0,
+      updatedAt: getTimestamp(),
+    })),
+    usersRef.child(session.loserUid).child('battleSummary').transaction((currentValue) => ({
+      wins: currentValue?.wins || 0,
+      losses: (currentValue?.losses || 0) + 1,
+      updatedAt: getTimestamp(),
+    })),
+  ]);
+}
+
+async function ensureBattleHistoryPair(userAUid, userBUid) {
+  if (!userAUid || !userBUid || userAUid === userBUid) return;
+  const now = getTimestamp();
+  await Promise.all([
+    battleHistoryRef.child(userAUid).child(userBUid).transaction((currentValue) => ({
+      battles: currentValue?.battles || 0,
+      wins: currentValue?.wins || 0,
+      losses: currentValue?.losses || 0,
+      createdAt: currentValue?.createdAt || now,
+      updatedAt: now,
+    })),
+    battleHistoryRef.child(userBUid).child(userAUid).transaction((currentValue) => ({
+      battles: currentValue?.battles || 0,
+      wins: currentValue?.wins || 0,
+      losses: currentValue?.losses || 0,
+      createdAt: currentValue?.createdAt || now,
+      updatedAt: now,
+    })),
+  ]);
+}
+
+async function cleanupFinishedBattlesForUser(userId) {
+  if (!userId) return;
+  const finishedSessions = battleSessions.filter((session) => (
+    session
+    && session.status === 'finished'
+    && (session.players || []).includes(userId)
+    && session.id
+  ));
+  if (!finishedSessions.length) return;
+
+  for (const session of finishedSessions) {
+    await registerBattleOutcome(session);
+    await battleSessionsRef.child(session.id).remove();
+  }
+}
+
+async function sendBattleChallenge(targetUserId, targetUserName) {
+  if (!currentUserId || !targetUserId || targetUserId === currentUserId) return;
+  await battleChallengesRef.child(targetUserId).set({
+    fromUid: currentUserId,
+    fromName: userName.textContent || 'Usuario sin nombre',
+    toUid: targetUserId,
+    toName: targetUserName || 'Usuario',
+    status: 'pending',
+    createdAt: getTimestamp(),
+    updatedAt: getTimestamp(),
+  });
+  setSyncStatus(`Desafío enviado a ${targetUserName || 'usuario'}.`, 'success');
+}
+
+function showChallengeModal(challengeData) {
+  activeChallenge = challengeData;
+  challengeMessage.textContent = `${challengeData.fromName || 'Un usuario'} te ha retado.`;
+  battleChallengeModal.classList.remove('hidden');
+}
+
+function hideChallengeModal() {
+  activeChallenge = null;
+  battleChallengeModal.classList.add('hidden');
+}
+
+function showSurrenderVictoryModal() {
+  if (battleSurrenderVictoryText) {
+    battleSurrenderVictoryText.textContent = 'FELICIDADES HAS VENCIDO! TU CONTRINCANTE SE HA RENDIDO';
+  }
+  battleSurrenderVictoryModal?.classList.remove('hidden');
+}
+
+function hideSurrenderVictoryModal() {
+  battleSurrenderVictoryModal?.classList.add('hidden');
+}
+
+async function respondToChallenge(status) {
+  if (!currentUserId || !activeChallenge || isRespondingToChallenge) return;
+  isRespondingToChallenge = true;
+  const challengeToRespond = { ...activeChallenge };
+  const challengerName = challengeToRespond?.fromName || 'otro usuario';
+  try {
+    if (status === 'accepted') {
+      await createBattleSessionForChallenge(challengeToRespond);
+    }
+    await battleChallengesRef.child(currentUserId).remove();
+    hideChallengeModal();
+    renderOnlineUsers();
+    setSyncStatus(
+      status === 'accepted'
+        ? `Aceptaste el reto de ${challengerName}.`
+        : `Rechazaste el reto de ${challengerName}.`,
+      'success',
+    );
+  } finally {
+    isRespondingToChallenge = false;
+  }
+}
+
+async function loadDeckForUser(userId) {
+  const snapshot = await userDecksRef.child(userId).once('value');
+  const data = snapshot.val();
+  if (!data) {
+    savedDeck = { characterIds: [], mainIds: [] };
+    selectedDeckIds = [];
+    deckOrder = [];
+    renderDeckBuilder();
+    return;
+  }
+
+  savedDeck = {
+    characterIds: Array.isArray(data.characterIds) ? data.characterIds : [],
+    mainIds: Array.isArray(data.mainIds) ? data.mainIds : [],
+  };
+  selectedDeckIds = [...savedDeck.characterIds];
+  deckOrder = [...savedDeck.characterIds];
+  renderDeckBuilder();
+}
+
+async function saveDeck() {
+  savedDeck = { characterIds: [...selectedDeckIds], mainIds: [] };
+  await userDecksRef.child(currentUserId).set(savedDeck);
+  setSyncStatus('Mazo guardado correctamente.', 'success');
+  renderDeckBuilder();
+}
+
+async function toggleMainCharacter(characterId) {
+  if (!savedDeck.characterIds.includes(characterId)) return;
+  const alreadyMain = savedDeck.mainIds.includes(characterId);
+  if (!alreadyMain && savedDeck.mainIds.length >= 3) return;
+
+  savedDeck.mainIds = alreadyMain
+    ? savedDeck.mainIds.filter((id) => id !== characterId)
+    : [...savedDeck.mainIds, characterId];
+  await userDecksRef.child(currentUserId).set(savedDeck);
+  renderDeckBuilder();
+}
+
+function shuffleList(values) {
+  const list = [...values];
+  for (let index = list.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [list[index], list[randomIndex]] = [list[randomIndex], list[index]];
+  }
+  return list;
+}
+
+function getBattlePlayers(session) {
+  return session.players || [];
+}
+
+function getPlayerState(session, uid) {
+  return (session.playerStates || {})[uid] || { hand: [], deck: [] };
+}
+
+function getStatValue(character, attribute) {
+  return Number.parseInt(character?.[attribute] ?? '0', 10) || 0;
+}
+
+function getEffectiveStatValue(session, cardId, attribute) {
+  const card = characters.find((entry) => entry.id === cardId);
+  const baseValue = getStatValue(card, attribute);
+  const battleModifiers = session?.battleModifiers || {};
+  const cardModifiers = battleModifiers[cardId] || {};
+  const modifierValue = Number.parseInt(cardModifiers[attribute] ?? '0', 10) || 0;
+  return Math.max(0, baseValue + modifierValue);
+}
+
+async function resolveAttack(session, attackerSlotId, targetSlotId, attackerAttribute, defenderAttribute = attackerAttribute) {
+  const attackerSlot = (session.fieldSlots || []).find((slot) => slot.id === attackerSlotId);
+  const targetSlot = (session.fieldSlots || []).find((slot) => slot.id === targetSlotId);
+  if (!attackerSlot || !targetSlot || !attackerSlot.cardId || !targetSlot.cardId) return;
+
+  const attackerCard = characters.find((entry) => entry.id === attackerSlot.cardId);
+  const targetCard = characters.find((entry) => entry.id === targetSlot.cardId);
+  if (!attackerCard || !targetCard) return;
+
+  const attackerValue = getEffectiveStatValue(session, attackerSlot.cardId, attackerAttribute);
+  const targetValue = getEffectiveStatValue(session, targetSlot.cardId, defenderAttribute);
+  const updatedSlots = [...session.fieldSlots];
+  const updatedPlayerStates = { ...(session.playerStates || {}) };
+  const updatedModifiers = { ...(session.battleModifiers || {}) };
+  const players = getBattlePlayers(session);
+  const nextTurnUid = players.find((uid) => uid !== session.currentTurnUid) || session.currentTurnUid;
+  let loserCardId = '';
+  let statPenaltyMessage = '';
+
+  if (attackerValue < targetValue) {
+    loserCardId = attackerSlot.cardId;
+    const penalty = Math.floor(targetValue / 2);
+    const attackerModifiers = { ...(updatedModifiers[attackerSlot.cardId] || {}) };
+    const previousPenalty = Number.parseInt(attackerModifiers[attackerAttribute] ?? '0', 10) || 0;
+    attackerModifiers[attackerAttribute] = previousPenalty - penalty;
+    updatedModifiers[attackerSlot.cardId] = attackerModifiers;
+    const resultingValue = getStatValue(attackerCard, attackerAttribute) + attackerModifiers[attackerAttribute];
+    statPenaltyMessage = ` ${attackerCard.name} pierde ${penalty} puntos en ${attackerAttribute} y queda en ${Math.max(0, resultingValue)} durante la batalla.`;
+    const loserIndex = updatedSlots.findIndex((slot) => slot.id === attackerSlotId);
+    updatedSlots[loserIndex] = { ...updatedSlots[loserIndex], cardId: '', faceDown: false };
+  } else if (targetValue < attackerValue) {
+    loserCardId = targetSlot.cardId;
+    const loserIndex = updatedSlots.findIndex((slot) => slot.id === targetSlotId);
+    updatedSlots[loserIndex] = { ...updatedSlots[loserIndex], cardId: '', faceDown: false };
+  }
+
+  if (!loserCardId) {
+    await battleSessionsRef.child(session.id).update({
+      currentTurnUid: nextTurnUid,
+      pendingDefense: null,
+      updatedAt: getTimestamp(),
+    });
+    window.alert(`Empate: ataque (${attackerAttribute}) y defensa (${defenderAttribute}). Ninguna carta desaparece y el turno pasa al rival.`);
+    return;
+  }
+
+  Object.keys(updatedPlayerStates).forEach((uid) => {
+    const state = updatedPlayerStates[uid] || { hand: [], deck: [] };
+    updatedPlayerStates[uid] = {
+      ...state,
+      hand: (state.hand || []).filter((id) => id !== loserCardId),
+      deck: (state.deck || []).filter((id) => id !== loserCardId),
+    };
+  });
+
+  await battleSessionsRef.child(session.id).update({
+    fieldSlots: updatedSlots,
+    playerStates: updatedPlayerStates,
+    battleModifiers: updatedModifiers,
+    currentTurnUid: nextTurnUid,
+    pendingDefense: null,
+    updatedAt: getTimestamp(),
+  });
+
+  window.alert(`Ataque (${attackerAttribute}) vs defensa (${defenderAttribute}): ${attackerCard.name} (${attackerValue}) vs ${targetCard.name} (${targetValue}). La carta derrotada desapareció del mazo y de la mano.${statPenaltyMessage} El turno pasa al rival.`);
+}
+
+function renderBattleArena() {
+  if (!activeBattleSession || !currentUserId) return;
+  const session = activeBattleSession;
+  const currentTurnUid = session.currentTurnUid;
+  const myTurn = currentTurnUid === currentUserId;
+  const players = getBattlePlayers(session);
+  const opponentUid = players.find((uid) => uid !== currentUserId);
+  const myState = getPlayerState(session, currentUserId);
+
+  battleTurnLabel.textContent = myTurn ? 'Es tu turno.' : 'Turno del contrincante.';
+  battleHand.innerHTML = myState.hand.map((cardId) => {
+    const card = characters.find((entry) => entry.id === cardId);
+    const selectedClass = selectedHandCardId === cardId ? 'is-picked' : '';
+    if (!card) return '';
+    const liveCard = {
+      ...card,
+      strength: getEffectiveStatValue(activeBattleSession, cardId, 'strength') || 0,
+      intelligence: getEffectiveStatValue(activeBattleSession, cardId, 'intelligence') || 0,
+      magic: getEffectiveStatValue(activeBattleSession, cardId, 'magic') || 0,
+      speed: getEffectiveStatValue(activeBattleSession, cardId, 'speed') || 0,
+    };
+    return renderSharedCharacterCard(liveCard, {
+      dataAttribute: 'data-battle-hand-id',
+      dataValue: cardId,
+      extraClasses: `deck-card battle-hand-card character-size-compact ${selectedClass}`,
+      ariaLabel: `Carta en mano ${card.name}`,
+    });
+  }).join('') || '<p>No tienes cartas en mano.</p>';
+
+  const renderSlots = (ownerUid, slotsContainer, isPlayer) => {
+    const slots = (session.fieldSlots || [])
+      .filter((slot) => slot.ownerUid === ownerUid)
+      .slice(0, 5);
+    slotsContainer.innerHTML = slots.map((slot) => {
+      const card = slot.cardId ? characters.find((entry) => entry.id === slot.cardId) : null;
+      const hiddenForOpponent = slot.faceDown && !isPlayer;
+      const canPlace = isPlayer && !slot.cardId && Boolean(selectedHandCardId) && Boolean(pendingPlacementMode);
+      const canInspect = Boolean(slot.cardId);
+      const content = slot.cardId
+        ? renderBattleCharacterCard(card, { hidden: hiddenForOpponent })
+        : '<span class="battle-slot-empty">Vacío</span>';;
+      return `<button class="battle-slot ${slot.cardId ? 'occupied' : ''} ${slot.faceDown ? 'facedown' : ''}" data-battle-slot-id="${slot.id}" ${(!canPlace && !canInspect) ? 'disabled' : ''}>${content}</button>`;
+    }).join('');
+  };
+
+  renderSlots(opponentUid, battleOpponentSlots, false);
+  renderSlots(currentUserId, battlePlayerSlots, true);
+  battleArenaModal.classList.remove('hidden');
+}
+
+function renderBattleCharacterCard(card, { hidden = false } = {}) {
+  if (hidden) {
+    return '<span class="battle-facedown-plate" aria-label="Carta boca abajo">◆</span>';
+  }
+  if (!card) {
+    return '<span class="battle-slot-empty">Carta</span>';
+  }
+  return renderSharedCharacterCard(card, {
+    extraClasses: 'battle-field-card character-size-compact',
+    staticCard: true,
+  });
+}
+
+function showCardActionModal(cardId) {
+  selectedHandCardId = cardId;
+  pendingPlacementMode = null;
+  battleCardActionModal.classList.remove('hidden');
+}
+
+function hideCardActionModal() {
+  battleCardActionModal.classList.add('hidden');
+}
+
+async function createBattleSessionForChallenge(challengeData) {
+  const accepterDeckSnapshot = await userDecksRef.child(challengeData.toUid).once('value');
+  const accepterDeck = (accepterDeckSnapshot.val()?.characterIds) || [];
+  if (accepterDeck.length !== 20) throw new Error('Debes tener mazo de 20 cartas para aceptar.');
+  const challengerDeckSnapshot = await userDecksRef.child(challengeData.fromUid).once('value');
+  const challengerDeck = (challengerDeckSnapshot.val()?.characterIds) || [];
+  if (challengerDeck.length !== 20) throw new Error('El contrincante no tiene mazo válido.');
+
+  const id = battleSessionsRef.push().key;
+  const challengerShuffled = shuffleList(challengerDeck);
+  const accepterShuffled = shuffleList(accepterDeck);
+  const players = [challengeData.fromUid, challengeData.toUid];
+  const fieldSlots = [
+    ...Array.from({ length: 5 }, (_, i) => ({ id: `opponent-${i + 1}`, ownerUid: challengeData.fromUid, cardId: '', faceDown: false })),
+    ...Array.from({ length: 5 }, (_, i) => ({ id: `player-${i + 1}`, ownerUid: challengeData.toUid, cardId: '', faceDown: false })),
+  ];
+
+  await ensureBattleHistoryPair(challengeData.fromUid, challengeData.toUid);
+
+  await battleSessionsRef.child(id).set({
+    id,
+    status: 'active',
+    players,
+    currentTurnUid: challengeData.fromUid,
+    fieldSlots,
+    playerStates: {
+      [challengeData.fromUid]: { hand: challengerShuffled.slice(0, 3), deck: challengerShuffled.slice(3) },
+      [challengeData.toUid]: { hand: accepterShuffled.slice(0, 3), deck: accepterShuffled.slice(3) },
+    },
+    createdAt: getTimestamp(),
+    updatedAt: getTimestamp(),
+  });
+  return id;
+}
+
+function playerHasNoRemainingCards(session, uid) {
+  const state = getPlayerState(session, uid);
+  const hasHandCards = (state.hand || []).length > 0;
+  const hasDeckCards = (state.deck || []).length > 0;
+  const hasFieldCards = (session.fieldSlots || []).some((slot) => slot.ownerUid === uid && slot.cardId);
+  return !hasHandCards && !hasDeckCards && !hasFieldCards;
+}
+
+async function finishBattleIfPlayerOutOfCards(session) {
+  if (!session?.id || session.status !== 'active') return false;
+  const players = getBattlePlayers(session);
+  if (players.length !== 2) return false;
+  const [playerAUid, playerBUid] = players;
+  const playerAOut = playerHasNoRemainingCards(session, playerAUid);
+  const playerBOut = playerHasNoRemainingCards(session, playerBUid);
+  if (!playerAOut && !playerBOut) return false;
+
+  const loserUid = playerAOut ? playerAUid : playerBUid;
+  const winnerUid = loserUid === playerAUid ? playerBUid : playerAUid;
+  await battleSessionsRef.child(session.id).update({
+    status: 'finished',
+    winnerUid,
+    loserUid,
+    endedAt: getTimestamp(),
+    updatedAt: getTimestamp(),
+  });
+  return true;
 }
 
 function closeProfile() {
@@ -489,6 +1177,44 @@ function openForm() {
   document.querySelector('#character-name').focus();
 }
 
+function buildRandomCharacter(nameNumber) {
+  const selectedType = getRandomCharacterTypeEntry();
+  const selectedClan = selectedType.clans[getRandomInt(0, selectedType.clans.length - 1)];
+
+  return {
+    id: crypto.randomUUID(),
+    name: String(nameNumber),
+    type: selectedType.type,
+    clan: selectedClan,
+    magic: String(getRandomInt(1, 100)),
+    strength: String(getRandomInt(1, 100)),
+    intelligence: String(getRandomInt(1, 100)),
+    speed: String(getRandomInt(1, 100)),
+    story: 'Generado automáticamente',
+    image: '',
+  };
+}
+
+async function createRandomCharacters() {
+  const quantityInput = document.querySelector('#random-character-quantity');
+  const quantity = Number.parseInt(quantityInput.value, 10);
+
+  if (Number.isNaN(quantity) || quantity < 1 || quantity > 20) {
+    setSyncStatus('Selecciona una cantidad válida entre 1 y 20 para crear personajes automáticos.', 'error');
+    return;
+  }
+
+  const randomCharacters = Array.from({ length: quantity }, (_, index) => buildRandomCharacter(index + 1));
+
+  try {
+    await Promise.all(randomCharacters.map((character) => saveCharacter(character)));
+    setSyncStatus(`Se crearon ${quantity} personaje(s) aleatoriamente y se guardaron en Firebase.`, 'success');
+  } catch (error) {
+    console.error('No se pudieron crear personajes aleatorios en Firebase:', error);
+    setSyncStatus('No se pudieron crear los personajes aleatorios. Revisa la conexión o las reglas de Firebase.', 'error');
+  }
+}
+
 function createCharacterForm() {
   personajesPanel.insertAdjacentHTML(
     'beforeend',
@@ -626,11 +1352,145 @@ function createCharacterForm() {
   });
 }
 
+
+async function signInWithGoogle() {
+  try {
+    await auth.signInWithPopup(googleProvider);
+  } catch (error) {
+    console.error('Error al iniciar sesión con Google:', error);
+    if (error?.code === 'auth/unauthorized-domain') {
+      setSyncStatus(
+        'Este dominio no está autorizado en Firebase Auth. Agrega el dominio actual en Firebase Console > Authentication > Settings > Authorized domains.',
+        'error'
+      );
+      return;
+    }
+    setSyncStatus('No se pudo iniciar sesión con Google. Inténtalo de nuevo.', 'error');
+  }
+}
+
+async function logout() {
+  try {
+    await auth.signOut();
+  } catch (error) {
+    console.error('Error al cerrar sesión:', error);
+  }
+}
+
+function toggleAuthenticatedUi(user) {
+  const isLogged = Boolean(user);
+  authPanel.classList.toggle('hidden', isLogged);
+  authUserPanel.classList.toggle('hidden', !isLogged);
+  gameLayout.classList.toggle('hidden', !isLogged);
+
+  if (!isLogged) {
+    const previousUserId = currentUserId;
+    currentUserId = null;
+    savedDeck = { characterIds: [], mainIds: [] };
+    selectedDeckIds = [];
+    deckOrder = [];
+    userName.textContent = '';
+    userUid.textContent = '';
+    userPhoto.removeAttribute('src');
+    if (previousUserId) {
+      onlineUsersRef.child(previousUserId).remove().catch(() => {});
+    }
+    onlineUsers = {};
+    renderOnlineUsers();
+    battleHistoryByOpponent = {};
+    renderBattleHistory();
+    return;
+  }
+
+  currentUserId = user.uid;
+  battleArenaDismissed = true;
+
+  userName.textContent = user.displayName || 'Usuario sin nombre';
+  userUid.textContent = `UID: ${user.uid}`;
+  if (user.photoURL) {
+    userPhoto.src = user.photoURL;
+  } else {
+    userPhoto.removeAttribute('src');
+  }
+
+  const presenceRef = onlineUsersRef.child(user.uid);
+  usersRef.child(user.uid).update({
+    uid: user.uid,
+    name: user.displayName || 'Usuario sin nombre',
+    photoURL: user.photoURL || '',
+    lastSeen: getTimestamp(),
+  }).catch((error) => {
+    console.error('No se pudo actualizar el perfil del usuario:', error);
+  });
+  const connectedRef = database.ref('.info/connected');
+  connectedRef.on('value', (snapshot) => {
+    if (snapshot.val() !== true) return;
+    presenceRef.onDisconnect().remove();
+    presenceRef.set({
+      uid: user.uid,
+      name: user.displayName || 'Usuario sin nombre',
+      photoURL: user.photoURL || '',
+      lastSeen: getTimestamp(),
+    });
+  });
+}
+
+loginGoogleButton.addEventListener('click', signInWithGoogle);
+logoutButton.addEventListener('click', logout);
+auth.onAuthStateChanged((user) => {
+  toggleAuthenticatedUi(user);
+  if (user) {
+    renderBattleHistory();
+    loadDeckForUser(user.uid).catch((error) => {
+      console.error('No se pudo cargar el mazo del usuario:', error);
+    });
+  } else {
+    renderDeckBuilder();
+    renderBattleHistory();
+  }
+});
+
 addCharacterButton.textContent = 'Crear personaje';
 addCharacterButton.addEventListener('click', openForm);
+randomCharacterButton.addEventListener('click', createRandomCharacters);
 createCharacterForm();
 renderGallery();
+renderDeckBuilder();
+renderOnlineUsers();
+renderBattleHistory();
 setSyncStatus('Conectando con Firebase...', 'loading');
+
+onlineUsersRef.on('value', (snapshot) => {
+  onlineUsers = snapshot.val() || {};
+  renderOnlineUsers();
+});
+
+usersRef.on('value', (snapshot) => {
+  users = snapshot.val() || {};
+  renderOnlineUsers();
+  renderBattleHistory();
+});
+
+battleHistoryRef.on('value', (snapshot) => {
+  if (!currentUserId) return;
+  battleHistoryByOpponent = snapshot.child(currentUserId).val() || {};
+  renderBattleHistory();
+});
+
+battleChallengesRef.on('value', (snapshot) => {
+  if (!currentUserId) return;
+  pendingChallenges = Object.values(snapshot.val() || {});
+  const challengeData = snapshot.child(currentUserId).val();
+  if (challengeData && challengeData.status === 'pending') {
+    showChallengeModal(challengeData);
+    return;
+  }
+
+  if (!challengeData && activeChallenge) {
+    hideChallengeModal();
+  }
+  renderDeckBuilder();
+});
 
 charactersRef.on(
   'value',
@@ -642,6 +1502,7 @@ charactersRef.on(
 
     hasReceivedFirebaseData = true;
     renderGallery();
+    renderDeckBuilder();
     setSyncStatus('Personajes sincronizados con Firebase y visibles en otros dispositivos.', 'success');
 
     try {
@@ -658,6 +1519,239 @@ charactersRef.on(
     if (!hasReceivedFirebaseData && localCharacters.length) {
       characters = localCharacters.map((character) => normalizeCharacter(character));
       renderGallery();
+      renderDeckBuilder();
     }
   },
 );
+
+const battleAttackModal = document.querySelector('#battle-attack-modal');
+const battleAttackText = document.querySelector('#battle-attack-text');
+const battleAttackOptions = document.querySelector('#battle-attack-options');
+const battleAttackCancelButton = document.querySelector('#battle-attack-cancel');
+const battleAttributes = ['magic', 'strength', 'intelligence', 'speed'];
+let pendingAttributePick = null;
+let isRespondingToChallenge = false;
+
+function openAttributePicker(mode, card, onPick) {
+  pendingAttributePick = { mode, onPick };
+  battleAttackText.textContent = mode === 'defense' ? `Elige atributo para defender con ${card.name}.` : `Elige atributo para atacar con ${card.name}.`;
+  battleAttackOptions.innerHTML = battleAttributes.map((attribute) => (
+    `<button class="save-character-btn battle-attribute-btn" data-battle-attribute="${attribute}" type="button">${attribute.toUpperCase()} (${escapeHtml(card[attribute])})</button>`
+  )).join('');
+  battleAttackModal.classList.remove('hidden');
+}
+
+function hideAttributePicker() {
+  battleAttackModal.classList.add('hidden');
+  pendingAttributePick = null;
+}
+
+document.addEventListener('click', (event) => {
+  const deckCard = event.target.closest('[data-deck-character-id]');
+  if (deckCard && currentUserId) {
+    const characterId = deckCard.dataset.deckCharacterId;
+    const hasSavedDeck = savedDeck.characterIds.length === 20;
+    if (hasSavedDeck) {
+      toggleMainCharacter(characterId).catch((error) => console.error('No se pudo actualizar personaje principal:', error));
+      return;
+    }
+
+    const isSelected = selectedDeckIds.includes(characterId);
+    if (isSelected) {
+      selectedDeckIds = selectedDeckIds.filter((id) => id !== characterId);
+      deckOrder = deckOrder.filter((id) => id !== characterId);
+    } else if (selectedDeckIds.length < 20) {
+      selectedDeckIds.push(characterId);
+      deckOrder.push(characterId);
+    }
+    renderDeckBuilder();
+    return;
+  }
+
+  const attributeButton = event.target.closest('[data-battle-attribute]');
+  if (attributeButton && pendingAttributePick) {
+    pendingAttributePick.onPick(attributeButton.dataset.battleAttribute);
+    hideAttributePicker();
+    return;
+  }
+
+  const handCard = event.target.closest('[data-battle-hand-id]');
+  if (handCard) {
+    showCardActionModal(handCard.dataset.battleHandId);
+    return;
+  }
+
+
+  const challengeButton = event.target.closest('[data-challenge-user-id]');
+  if (challengeButton) {
+    const challengedUid = challengeButton.dataset.challengeUserId;
+    const challengedName = challengeButton.dataset.challengeUserName || 'Usuario';
+    if (!challengedUid || !currentUserId || challengedUid === currentUserId) return;
+
+    const existingBattle = getOpenBattleWithUser(challengedUid);
+    if (existingBattle) {
+      activeBattleSession = existingBattle;
+      battleArenaDismissed = false;
+      renderBattleArena();
+      return;
+    }
+
+    const hasDeckReady = savedDeck.characterIds.length === 20;
+    if (!hasDeckReady) {
+      window.alert('Debes guardar un mazo de 20 personajes antes de retar.');
+      return;
+    }
+
+    sendBattleChallenge(challengedUid, challengedName)
+      .catch((error) => console.error('No se pudo enviar el desafío:', error));
+    return;
+  }
+
+  const surrenderButton = event.target.closest('[data-surrender-user-id]');
+  if (surrenderButton) {
+    surrenderBattleAgainst(surrenderButton.dataset.surrenderUserId).catch((error) => {
+      console.error('No se pudo rendir la batalla:', error);
+    });
+    return;
+  }
+
+  const targetSlot = event.target.closest('[data-battle-slot-id]');
+  if (!targetSlot || !activeBattleSession || !currentUserId) return;
+  if (activeBattleSession.currentTurnUid !== currentUserId) return;
+
+  const slotId = targetSlot.dataset.battleSlotId;
+  const session = activeBattleSession;
+  const clickedSlot = (session.fieldSlots || []).find((slot) => slot.id === slotId);
+  if (!clickedSlot) return;
+
+  if (!clickedSlot.cardId) {
+    if (!selectedHandCardId || !pendingPlacementMode) return;
+    if (clickedSlot.ownerUid !== currentUserId) return;
+    const myState = getPlayerState(session, currentUserId);
+    if (!myState.hand.includes(selectedHandCardId)) return;
+    const faceDown = pendingPlacementMode === 'facedown';
+    const fieldSlots = (session.fieldSlots || []).map((slot) => (slot.id === slotId ? { ...slot, cardId: selectedHandCardId, faceDown } : slot));
+    const updatedHand = myState.hand.filter((id) => id !== selectedHandCardId);
+    const updatedDeck = [...myState.deck];
+    if (updatedDeck.length) updatedHand.push(updatedDeck.shift());
+    const opponentUid = session.players.find((uid) => uid !== currentUserId);
+    battleSessionsRef.child(session.id).update({
+      fieldSlots,
+      currentTurnUid: opponentUid,
+      [`playerStates/${currentUserId}/hand`]: updatedHand,
+      [`playerStates/${currentUserId}/deck`]: updatedDeck,
+      updatedAt: getTimestamp(),
+    });
+    selectedHandCardId = null;
+    pendingPlacementMode = null;
+    return;
+  }
+
+  if (clickedSlot.ownerUid === currentUserId) {
+    const attackerCard = characters.find((entry) => entry.id === clickedSlot.cardId);
+    if (!attackerCard) return;
+    openAttributePicker('attack', attackerCard, (selectedAttribute) => {
+      pendingAttack = { attackerSlotId: clickedSlot.id, attribute: selectedAttribute };
+      window.alert('Atributo elegido. Ahora selecciona una carta del campo rival para atacarla.');
+    });
+    return;
+  }
+
+  if (!pendingAttack) return;
+  const targetCard = characters.find((entry) => entry.id === clickedSlot.cardId);
+  if (!targetCard) return;
+
+  if (!clickedSlot.faceDown) {
+    resolveAttack(session, pendingAttack.attackerSlotId, clickedSlot.id, pendingAttack.attribute, pendingAttack.attribute).catch((error) => console.error('No se pudo resolver el ataque:', error));
+    pendingAttack = null;
+    return;
+  }
+
+  battleSessionsRef.child(session.id).update({
+    pendingDefense: {
+      attackerSlotId: pendingAttack.attackerSlotId,
+      targetSlotId: clickedSlot.id,
+      attackerAttribute: pendingAttack.attribute,
+      attackerUid: currentUserId,
+      defenderUid: clickedSlot.ownerUid,
+    },
+    updatedAt: getTimestamp(),
+  });
+  pendingAttack = null;
+  window.alert('Carta boca abajo elegida. El defensor debe escoger su atributo para resolver el combate.');
+});
+
+battleAttackCancelButton?.addEventListener('click', hideAttributePicker);
+acceptChallengeButton.addEventListener('click', () => {
+  respondToChallenge('accepted').catch((error) => {
+    console.error('No se pudo aceptar el desafío:', error);
+  });
+});
+
+rejectChallengeButton.addEventListener('click', () => {
+  respondToChallenge('rejected').catch((error) => {
+    console.error('No se pudo rechazar el desafío:', error);
+  });
+});
+
+battleArenaCloseButton.addEventListener('click', () => {
+  battleArenaDismissed = true;
+  battleArenaModal.classList.add('hidden');
+});
+
+battleSurrenderVictoryCloseButton?.addEventListener('click', hideSurrenderVictoryModal);
+
+battleSessionsRef.on('value', (snapshot) => {
+  if (!currentUserId) return;
+  const sessions = snapshot.val() || {};
+  battleSessions = Object.values(sessions);
+  cleanupFinishedBattlesForUser(currentUserId).catch((error) => {
+    console.error('No se pudieron limpiar batallas terminadas:', error);
+  });
+  const current = Object.values(sessions).find((session) => (session.players || []).includes(currentUserId) && session.status === 'active');
+  if (!current) {
+    activeBattleSession = null;
+    battleArenaDismissed = false;
+    battleArenaModal.classList.add('hidden');
+    renderOnlineUsers();
+    renderDeckBuilder();
+    return;
+  }
+  finishBattleIfPlayerOutOfCards(current).catch((error) => {
+    console.error('No se pudo finalizar la batalla por falta de cartas:', error);
+  });
+  const previousBattleId = activeBattleSession?.id;
+  activeBattleSession = current;
+  if (previousBattleId !== current.id) {
+    battleArenaDismissed = true;
+  }
+  if (!battleArenaDismissed) {
+    renderBattleArena();
+  } else {
+    battleArenaModal.classList.add('hidden');
+  }
+  const pendingDefenseData = current.pendingDefense;
+  if (pendingDefenseData?.defenderUid === currentUserId) {
+    const defenderSlot = (current.fieldSlots || []).find((slot) => slot.id === pendingDefenseData.targetSlotId);
+    const defenderCard = defenderSlot?.cardId ? characters.find((entry) => entry.id === defenderSlot.cardId) : null;
+    if (defenderCard) {
+      openAttributePicker('defense', defenderCard, (defenseAttribute) => {
+        resolveAttack(
+          current,
+          pendingDefenseData.attackerSlotId,
+          pendingDefenseData.targetSlotId,
+          pendingDefenseData.attackerAttribute,
+          defenseAttribute,
+        ).catch((error) => console.error('No se pudo resolver defensa:', error));
+      });
+    }
+  }
+  renderOnlineUsers();
+  renderDeckBuilder();
+});
+
+
+battleActionPlaceButton?.addEventListener('click', () => { pendingPlacementMode = 'faceup'; hideCardActionModal(); renderBattleArena(); });
+battleActionFaceDownButton?.addEventListener('click', () => { pendingPlacementMode = 'facedown'; hideCardActionModal(); renderBattleArena(); });
+battleActionCancelButton?.addEventListener('click', () => { selectedHandCardId = null; pendingPlacementMode = null; hideCardActionModal(); renderBattleArena(); });
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { battleArenaDismissed = true; battleArenaModal.classList.add('hidden'); hideCardActionModal(); } });
