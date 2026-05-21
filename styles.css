@@ -197,6 +197,19 @@ body::before {
   outline: 2px solid #2ecc71;
 }
 
+.character-card.is-development-mode {
+  box-shadow:
+    0 0 0 2px rgba(255, 214, 102, 0.95),
+    0 0 16px rgba(255, 215, 0, 0.95),
+    0 0 34px rgba(255, 196, 0, 0.7);
+  animation: developmentGlow 1.8s ease-in-out infinite alternate;
+}
+
+@keyframes developmentGlow {
+  from { filter: saturate(1.05) brightness(1); }
+  to { filter: saturate(1.2) brightness(1.08); }
+}
+
 @media (max-width: 1400px) {
   .deck-grid {
     grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -996,11 +1009,43 @@ body::before {
 .battle-board {
   display: grid;
   gap: 1rem;
+  padding: 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(167, 177, 193, 0.45);
+  background:
+    radial-gradient(circle at 15% 18%, rgba(198, 206, 219, 0.28), transparent 30%),
+    radial-gradient(circle at 88% 82%, rgba(141, 151, 166, 0.18), transparent 34%),
+    repeating-linear-gradient(
+      45deg,
+      rgba(124, 132, 144, 0.09) 0 10px,
+      rgba(69, 75, 85, 0.09) 10px 20px
+    ),
+    linear-gradient(160deg, rgba(40, 44, 52, 0.9), rgba(23, 26, 31, 0.94));
+  box-shadow:
+    inset 0 0 0 1px rgba(216, 224, 236, 0.2),
+    inset 0 16px 28px rgba(255, 255, 255, 0.08),
+    inset 0 -24px 30px rgba(0, 0, 0, 0.45),
+    0 14px 32px rgba(0, 0, 0, 0.42);
 }
 
 .battle-slot {
   min-height: 260px;
   padding: 0;
+  border: 1px solid rgba(181, 192, 209, 0.5);
+  background:
+    radial-gradient(circle at 18% 20%, rgba(255, 255, 255, 0.16), transparent 26%),
+    radial-gradient(circle at 80% 78%, rgba(162, 170, 182, 0.16), transparent 38%),
+    repeating-linear-gradient(
+      -32deg,
+      rgba(85, 94, 106, 0.12) 0 7px,
+      rgba(45, 51, 60, 0.12) 7px 14px
+    ),
+    linear-gradient(165deg, rgba(69, 74, 83, 0.9), rgba(35, 39, 46, 0.95));
+  box-shadow:
+    inset 0 0 0 1px rgba(229, 236, 247, 0.12),
+    inset 0 12px 18px rgba(255, 255, 255, 0.08),
+    inset 0 -18px 24px rgba(0, 0, 0, 0.5),
+    0 6px 14px rgba(0, 0, 0, 0.35);
 }
 
 @media (max-width: 900px) {
@@ -1034,12 +1079,47 @@ body::before {
   height: 100%;
   width: 100%;
   border-radius: 10px;
-  background: linear-gradient(145deg,#cfd3da,#9aa1ad 45%,#6c7480);
-  color: #2f3540;
-  font-size: 2rem;
+  border: 1px solid rgba(212, 224, 245, 0.48);
+  background:
+    radial-gradient(circle at 18% 18%, rgba(255, 255, 255, 0.35), transparent 30%),
+    radial-gradient(circle at 82% 74%, rgba(215, 226, 243, 0.22), transparent 36%),
+    repeating-linear-gradient(
+      -32deg,
+      rgba(230, 238, 251, 0.24) 0 8px,
+      rgba(111, 123, 143, 0.2) 8px 16px
+    ),
+    linear-gradient(150deg, #bcc6d8, #8896ad 48%, #5f6d84);
+  box-shadow:
+    inset 0 0 0 1px rgba(239, 245, 255, 0.26),
+    inset 0 16px 22px rgba(255, 255, 255, 0.2),
+    inset 0 -18px 22px rgba(35, 46, 63, 0.4),
+    0 8px 16px rgba(0, 0, 0, 0.28);
 }
 
 .battle-slot-empty { opacity: .8; }
+
+.battle-facedown-owner .character-card-right {
+  position: relative;
+}
+
+.battle-facedown-owner .character-card-image,
+.battle-facedown-owner .placeholder-image {
+  filter: brightness(0.4) saturate(0.75);
+}
+
+.battle-facedown-owner .character-card-right::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(4, 6, 12, 0.28), rgba(4, 6, 12, 0.58)),
+    repeating-linear-gradient(
+      -30deg,
+      rgba(143, 156, 181, 0.08) 0 10px,
+      rgba(18, 23, 31, 0.12) 10px 20px
+    );
+}
 
 .battle-attribute-options {
   display: grid;
@@ -1206,4 +1286,45 @@ body::before {
 
 .history-type-context-menu button:hover {
   background: rgba(244, 225, 163, 0.16);
+}
+
+
+.xp-positive { color: #2ecc71; }
+.xp-negative { color: #e74c3c; }
+
+.events-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.event-card {
+  border: 1px solid rgba(196, 152, 70, 0.45);
+  border-radius: 10px;
+  padding: 0.8rem;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.event-thumb img {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.event-tag {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  margin: 0.5rem 0;
+  font-weight: 700;
+}
+
+.event-tag.positive { background: #2ecc71; color: #0e2a18; }
+.event-tag.negative { background: #e74c3c; color: #fff3f0; }
+
+.event-story-image {
+  width: 100%;
+  border-radius: 6px;
+  margin-top: 0.4rem;
 }

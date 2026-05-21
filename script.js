@@ -23,6 +23,17 @@ const battleHistoryRef = database.ref('battleHistory');
 const battleOutcomeMarkersRef = database.ref('battleOutcomeMarkers');
 const historyTypesRef = database.ref('historyTypes');
 
+
+const BOT_UID = 'bot-desarrollo';
+const BOT_NAME = 'DESARROLLO';
+const BOT_USER = {
+  uid: BOT_UID,
+  name: BOT_NAME,
+  photoURL: '',
+};
+let botTurnInFlightSessionId = '';
+
+
 const buttons = document.querySelectorAll('.menu-btn');
 const panels = document.querySelectorAll('.panel');
 const personajesPanel = document.querySelector('#personajes');
@@ -157,6 +168,26 @@ let historyTypesData = {};
 let selectedHistoryTypeId = '';
 
 let historyTypeContextMenuState = null;
+let experienceModalState = null;
+const CHARACTER_DEVELOPMENT_MODE = {
+  PENDING: 'pending-battle',
+  READY_TO_EDIT: 'ready-to-edit',
+};
+const POSITIVE_EVENT_TAGS = ['Amigo', 'Objeto', 'Habilidad', 'Misión', 'Clan'];
+const NEGATIVE_EVENT_TAGS = ['Enemigo', 'Maldición', 'Miedo', 'Debilidad'];
+
+function getCharacterStatValue(character, attribute) {
+  return Number.parseInt(character?.[attribute] ?? '0', 10) || 0;
+}
+
+function isCharacterAtMaxBaseStats(character) {
+  return ['magic', 'strength', 'intelligence', 'speed'].every((attribute) => getCharacterStatValue(character, attribute) >= 100);
+}
+
+function getCharacterDevelopmentProgress(userId, character) {
+  const cardExperience = users[userId]?.experiencePoints?.byCharacter?.[character.id] || {};
+  return cardExperience.developmentMode || null;
+}
 
 function closeHistoryTypeContextMenu() {
   if (!historyTypeContextMenuState) return;
@@ -375,6 +406,8 @@ function renderSharedCharacterCard(character, options = {}) {
   } = options;
 
   const safeName = escapeHtml(character.name || 'Carta');
+  const developmentProgress = currentUserId ? getCharacterDevelopmentProgress(currentUserId, character) : null;
+  const isInDevelopmentMode = Boolean(developmentProgress);
   const safeImage = escapeHtml(character.image || '');
   const safeDataValue = escapeHtml(dataValue || '');
   const imageMarkup = character.image
@@ -387,7 +420,7 @@ function renderSharedCharacterCard(character, options = {}) {
     : `type="button" ${dataAttribute}="${safeDataValue}" aria-label="${escapeHtml(ariaLabel)}"`;
 
   return `
-    <${tagName} class="character-card character-gallery-card ${extraClasses}" ${interactiveAttributes} style="${getTypeColorStyles(character.type)}${inlineStyle}">
+    <${tagName} class="character-card character-gallery-card ${extraClasses} ${isInDevelopmentMode ? 'is-development-mode' : ''}" ${interactiveAttributes} style="${getTypeColorStyles(character.type)}${inlineStyle}">
       ${footerPrefix}
       <span class="character-card-layout">
         <span class="character-card-header">${safeName}</span>
@@ -447,7 +480,7 @@ function renderDeckBuilder() {
   container.innerHTML = `
     <p class="deck-description">
       ${hasSavedDeck
-        ? 'Tu mazo principal está guardado. Elige 3 personajes principales.'
+        ? 'Tu mazo principal está guardado. Elige 5 personajes principales.'
         : 'Selecciona 20 personajes para tu mazo principal.'}
     </p>
     <div class="deck-count">${hasSavedDeck ? `Mazo guardado: ${savedDeck.characterIds.length}/20` : `Seleccionados: ${selectedDeckIds.length}/20`}</div>
@@ -498,7 +531,10 @@ function renderOnlineUsers() {
     return;
   }
 
-  const authenticatedUsers = Object.entries(users).map(([uid, entry]) => ({ uid, ...(entry || {}) })).filter((entry) => entry.uid !== currentUserId);
+  const authenticatedUsers = [
+    ...Object.entries(users).map(([uid, entry]) => ({ uid, ...(entry || {}) })).filter((entry) => entry.uid !== currentUserId),
+    BOT_USER,
+  ];
   if (!authenticatedUsers.length) {
     battleUsersList.innerHTML = '<p>No hay otros perfiles autenticados disponibles por ahora.</p>';
     return;
@@ -508,7 +544,7 @@ function renderOnlineUsers() {
     .map((user) => {
       const openBattle = getOpenBattleWithUser(user.uid);
       const hasOpenBattle = Boolean(openBattle);
-      const isOnline = Boolean(onlineUsers[user.uid]);
+      const isOnline = isBotUid(user.uid) || Boolean(onlineUsers[user.uid]);
       const isSurrendering = surrenderInFlightUserId === user.uid;
       const hasPendingOutgoingChallenge = pendingChallenges.some((challenge) => (
         challenge?.status === 'pending'
@@ -623,7 +659,7 @@ async function registerBattleOutcome(session) {
   const winnerVsLoserRef = battleHistoryRef.child(session.winnerUid).child(session.loserUid);
   const loserVsWinnerRef = battleHistoryRef.child(session.loserUid).child(session.winnerUid);
 
-  await Promise.all([
+  const updates = [
     winnerVsLoserRef.transaction((currentValue) => ({
       battles: (currentValue?.battles || 0) + 1,
       wins: (currentValue?.wins || 0) + 1,
@@ -638,17 +674,48 @@ async function registerBattleOutcome(session) {
       createdAt: currentValue?.createdAt || getTimestamp(),
       updatedAt: getTimestamp(),
     })),
-    usersRef.child(session.winnerUid).child('battleSummary').transaction((currentValue) => ({
-      wins: (currentValue?.wins || 0) + 1,
-      losses: currentValue?.losses || 0,
-      updatedAt: getTimestamp(),
-    })),
-    usersRef.child(session.loserUid).child('battleSummary').transaction((currentValue) => ({
-      wins: currentValue?.wins || 0,
-      losses: (currentValue?.losses || 0) + 1,
-      updatedAt: getTimestamp(),
-    })),
-  ]);
+  ];
+  let winnerExperienceResult = null;
+  let loserExperienceResult = null;
+  if (!isBotUid(session.winnerUid)) {
+    updates.push(
+      usersRef.child(session.winnerUid).child('battleSummary').transaction((currentValue) => ({
+        wins: (currentValue?.wins || 0) + 1,
+        losses: currentValue?.losses || 0,
+        updatedAt: getTimestamp(),
+      })),
+    );
+    winnerExperienceResult = await registerExperiencePointForUser(session.winnerUid, true);
+  }
+  if (!isBotUid(session.loserUid)) {
+    updates.push(
+      usersRef.child(session.loserUid).child('battleSummary').transaction((currentValue) => ({
+        wins: currentValue?.wins || 0,
+        losses: (currentValue?.losses || 0) + 1,
+        updatedAt: getTimestamp(),
+      })),
+    );
+    loserExperienceResult = await registerExperiencePointForUser(session.loserUid, false);
+  }
+  await Promise.all(updates);
+  if (winnerExperienceResult?.forcedCardId && loserExperienceResult?.selectedCardId) {
+    await createCharacterEventForDevelopment({
+      developmentCharacterId: winnerExperienceResult.forcedCardId,
+      rivalUid: session.loserUid,
+      rivalName: users[session.loserUid]?.name,
+      rivalCardId: loserExperienceResult.selectedCardId,
+      didWin: true,
+    });
+  }
+  if (loserExperienceResult?.forcedCardId && winnerExperienceResult?.selectedCardId) {
+    await createCharacterEventForDevelopment({
+      developmentCharacterId: loserExperienceResult.forcedCardId,
+      rivalUid: session.winnerUid,
+      rivalName: users[session.winnerUid]?.name,
+      rivalCardId: winnerExperienceResult.selectedCardId,
+      didWin: false,
+    });
+  }
 }
 
 async function ensureBattleHistoryPair(userAUid, userBUid) {
@@ -777,13 +844,87 @@ async function saveDeck() {
 async function toggleMainCharacter(characterId) {
   if (!savedDeck.characterIds.includes(characterId)) return;
   const alreadyMain = savedDeck.mainIds.includes(characterId);
-  if (!alreadyMain && savedDeck.mainIds.length >= 3) return;
+  if (!alreadyMain && savedDeck.mainIds.length >= 5) return;
 
   savedDeck.mainIds = alreadyMain
     ? savedDeck.mainIds.filter((id) => id !== characterId)
     : [...savedDeck.mainIds, characterId];
   await userDecksRef.child(currentUserId).set(savedDeck);
   renderDeckBuilder();
+}
+
+async function registerExperiencePointForUser(userId, isPositive) {
+  if (!userId) return null;
+  const deckSnapshot = await userDecksRef.child(userId).once('value');
+  const deckData = deckSnapshot.val() || {};
+  const mainIds = Array.isArray(deckData.mainIds) ? deckData.mainIds.filter(Boolean) : [];
+  if (!mainIds.length) return null;
+
+  const forcedCard = characters.find((entry) => {
+    const development = getCharacterDevelopmentProgress(userId, entry);
+    return development?.status === CHARACTER_DEVELOPMENT_MODE.PENDING;
+  });
+  const selectedCardId = forcedCard?.id || mainIds[Math.floor(Math.random() * mainIds.length)];
+  if (!selectedCardId) return null;
+  const selectedCharacter = characters.find((entry) => entry.id === selectedCardId) || null;
+  const shouldActivateDevelopmentMode = selectedCharacter
+    && isCharacterAtMaxBaseStats(selectedCharacter)
+    && !forcedCard;
+  const pointDelta = forcedCard ? 5 : 1;
+
+  await usersRef.child(userId).child('experiencePoints').transaction((currentValue) => {
+    const current = currentValue || {};
+    const byCharacter = current.byCharacter || {};
+    const currentCard = byCharacter[selectedCardId] || { positive: 0, negative: 0, total: 0 };
+    const positive = (current.positive || 0) + (isPositive ? 1 : 0);
+    const negative = (current.negative || 0) + (isPositive ? 0 : 1);
+    const cardPositive = currentCard.positive || 0;
+    const cardNegative = currentCard.negative || 0;
+    if ((cardPositive + cardNegative) >= 5) {
+      return current;
+    }
+    const updatedCard = {
+      positive: cardPositive + (isPositive ? 1 : 0),
+      negative: cardNegative + (isPositive ? 0 : 1),
+      total: (currentCard.total || 0) + (isPositive ? 1 : -1),
+    };
+    return {
+      positive,
+      negative,
+      byCharacter: {
+        ...byCharacter,
+        [selectedCardId]: updatedCard,
+      },
+      updatedAt: getTimestamp(),
+    };
+  });
+
+  if (shouldActivateDevelopmentMode) {
+    await userDecksRef.child(userId).child('mainIds').set([selectedCardId]);
+  }
+  return { selectedCardId, forcedCardId: forcedCard?.id || null, isPositive };
+}
+
+async function createCharacterEventForDevelopment({ developmentCharacterId, rivalUid, rivalName, rivalCardId, didWin }) {
+  if (!developmentCharacterId || !rivalUid || !rivalCardId) return;
+  const tagPool = didWin ? POSITIVE_EVENT_TAGS : NEGATIVE_EVENT_TAGS;
+  const tag = tagPool[Math.floor(Math.random() * tagPool.length)];
+  const rivalCard = characters.find((entry) => entry.id === rivalCardId);
+  const eventId = crypto.randomUUID();
+  await getCharacterRef(developmentCharacterId).child('events').child(eventId).set({
+    id: eventId,
+    tag,
+    isPositive: didWin,
+    rivalUid,
+    rivalName: rivalName || users[rivalUid]?.name || 'Rival desconocido',
+    rivalCardId,
+    rivalCardName: rivalCard?.name || 'Carta desconocida',
+    rivalCardImage: rivalCard?.image || '',
+    story: '',
+    image: '',
+    locked: false,
+    createdAt: getTimestamp(),
+  });
 }
 
 function shuffleList(values) {
@@ -797,6 +938,69 @@ function shuffleList(values) {
 
 function getBattlePlayers(session) {
   return session.players || [];
+}
+
+function isBotUid(uid) {
+  return uid === BOT_UID;
+}
+
+function getBotDeckCharacterIds() {
+  if (!characters.length) return [];
+  return shuffleList(characters.map((entry) => entry.id)).slice(0, 20);
+}
+
+function getBotPreferredAttack(session, botUid) {
+  const botSlots = (session.fieldSlots || []).filter((slot) => slot.ownerUid === botUid && slot.cardId);
+  const rivalSlots = (session.fieldSlots || []).filter((slot) => slot.ownerUid !== botUid && slot.cardId);
+  if (!botSlots.length || !rivalSlots.length) return null;
+
+  let bestPlay = null;
+  botSlots.forEach((attackerSlot) => {
+    const bestAttribute = battleAttributes.reduce((best, attribute) => {
+      const value = getEffectiveStatValue(session, attackerSlot.cardId, attribute);
+      if (!best || value > best.value) {
+        return { attribute, value };
+      }
+      return best;
+    }, null);
+
+    if (!bestAttribute || bestAttribute.value <= 0) return;
+
+    const validTargets = rivalSlots
+      .map((targetSlot) => {
+        if (targetSlot.faceDown) {
+          return { targetSlot, defenderValue: null };
+        }
+        const defenderValue = getEffectiveStatValue(session, targetSlot.cardId, bestAttribute.attribute);
+        if (defenderValue < bestAttribute.value) {
+          return { targetSlot, defenderValue };
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    if (!validTargets.length) return;
+
+    validTargets.sort((a, b) => {
+      const aValue = a.defenderValue === null ? Number.POSITIVE_INFINITY : a.defenderValue;
+      const bValue = b.defenderValue === null ? Number.POSITIVE_INFINITY : b.defenderValue;
+      return aValue - bValue;
+    });
+
+    const selectedTarget = validTargets[0];
+    const attackScore = bestAttribute.value - (selectedTarget.defenderValue ?? 0);
+
+    if (!bestPlay || attackScore > bestPlay.score) {
+      bestPlay = {
+        attackerSlotId: attackerSlot.id,
+        targetSlotId: selectedTarget.targetSlot.id,
+        attribute: bestAttribute.attribute,
+        score: attackScore,
+      };
+    }
+  });
+
+  return bestPlay;
 }
 
 function getPlayerState(session, uid) {
@@ -816,6 +1020,16 @@ function getEffectiveStatValue(session, cardId, attribute) {
   return Math.max(0, baseValue + modifierValue);
 }
 
+function getHighestAttributeForCard(session, cardId) {
+  return battleAttributes.reduce((best, attribute) => {
+    const value = getEffectiveStatValue(session, cardId, attribute);
+    if (!best || value > best.value) {
+      return { attribute, value };
+    }
+    return best;
+  }, null)?.attribute || 'strength';
+}
+
 async function resolveAttack(session, attackerSlotId, targetSlotId, attackerAttribute, defenderAttribute = attackerAttribute) {
   const attackerSlot = (session.fieldSlots || []).find((slot) => slot.id === attackerSlotId);
   const targetSlot = (session.fieldSlots || []).find((slot) => slot.id === targetSlotId);
@@ -833,32 +1047,63 @@ async function resolveAttack(session, attackerSlotId, targetSlotId, attackerAttr
   const players = getBattlePlayers(session);
   const nextTurnUid = players.find((uid) => uid !== session.currentTurnUid) || session.currentTurnUid;
   let loserCardId = '';
+  const destroyedCardIds = new Set();
   let statPenaltyMessage = '';
+  let attackerDestroyedByExhaustion = false;
+  let targetSurvived = true;
+
+  const attackerModifiers = { ...(updatedModifiers[attackerSlot.cardId] || {}) };
+  const previousAttackPenalty = Number.parseInt(attackerModifiers[attackerAttribute] ?? '0', 10) || 0;
+  const attackPenalty = 5;
+  attackerModifiers[attackerAttribute] = previousAttackPenalty - attackPenalty;
+  updatedModifiers[attackerSlot.cardId] = attackerModifiers;
+  const attackerResultingValue = getStatValue(attackerCard, attackerAttribute) + attackerModifiers[attackerAttribute];
+  statPenaltyMessage = ` ${attackerCard.name} pierde ${attackPenalty} puntos en ${attackerAttribute} por atacar y queda en ${Math.max(0, attackerResultingValue)} durante la batalla.`;
 
   if (attackerValue < targetValue) {
     loserCardId = attackerSlot.cardId;
-    const penalty = Math.floor(targetValue / 2);
-    const attackerModifiers = { ...(updatedModifiers[attackerSlot.cardId] || {}) };
-    const previousPenalty = Number.parseInt(attackerModifiers[attackerAttribute] ?? '0', 10) || 0;
-    attackerModifiers[attackerAttribute] = previousPenalty - penalty;
-    updatedModifiers[attackerSlot.cardId] = attackerModifiers;
-    const resultingValue = getStatValue(attackerCard, attackerAttribute) + attackerModifiers[attackerAttribute];
-    statPenaltyMessage = ` ${attackerCard.name} pierde ${penalty} puntos en ${attackerAttribute} y queda en ${Math.max(0, resultingValue)} durante la batalla.`;
-    const loserIndex = updatedSlots.findIndex((slot) => slot.id === attackerSlotId);
-    updatedSlots[loserIndex] = { ...updatedSlots[loserIndex], cardId: '', faceDown: false };
+    destroyedCardIds.add(attackerSlot.cardId);
+    targetSurvived = true;
+    const attackerIndex = updatedSlots.findIndex((slot) => slot.id === attackerSlotId);
+    if (attackerIndex >= 0) {
+      updatedSlots[attackerIndex] = { ...updatedSlots[attackerIndex], cardId: '', faceDown: false };
+    }
   } else if (targetValue < attackerValue) {
     loserCardId = targetSlot.cardId;
+    destroyedCardIds.add(targetSlot.cardId);
+    targetSurvived = false;
     const loserIndex = updatedSlots.findIndex((slot) => slot.id === targetSlotId);
     updatedSlots[loserIndex] = { ...updatedSlots[loserIndex], cardId: '', faceDown: false };
   }
 
+  if (attackerResultingValue <= 0) {
+    attackerDestroyedByExhaustion = true;
+    const attackerIndex = updatedSlots.findIndex((slot) => slot.id === attackerSlotId);
+    if (attackerIndex >= 0 && updatedSlots[attackerIndex].cardId) {
+      updatedSlots[attackerIndex] = { ...updatedSlots[attackerIndex], cardId: '', faceDown: false };
+    }
+    if (!loserCardId) {
+      loserCardId = attackerSlot.cardId;
+    }
+    destroyedCardIds.add(attackerSlot.cardId);
+  }
+
+  if (targetSurvived) {
+    const defenderIndex = updatedSlots.findIndex((slot) => slot.id === targetSlotId);
+    if (defenderIndex >= 0 && updatedSlots[defenderIndex].faceDown) {
+      updatedSlots[defenderIndex] = { ...updatedSlots[defenderIndex], faceDown: false };
+    }
+  }
+
   if (!loserCardId) {
     await battleSessionsRef.child(session.id).update({
+      fieldSlots: updatedSlots,
+      battleModifiers: updatedModifiers,
       currentTurnUid: nextTurnUid,
       pendingDefense: null,
       updatedAt: getTimestamp(),
     });
-    window.alert(`Empate: ataque (${attackerAttribute}) y defensa (${defenderAttribute}). Ninguna carta desaparece y el turno pasa al rival.`);
+    window.alert(`Ataque (${attackerAttribute}) vs defensa (${defenderAttribute}): ${attackerCard.name} (${attackerValue}) vs ${targetCard.name} (${targetValue}). Ninguna carta desaparece y el turno pasa al rival.${statPenaltyMessage}`);
     return;
   }
 
@@ -866,8 +1111,8 @@ async function resolveAttack(session, attackerSlotId, targetSlotId, attackerAttr
     const state = updatedPlayerStates[uid] || { hand: [], deck: [] };
     updatedPlayerStates[uid] = {
       ...state,
-      hand: (state.hand || []).filter((id) => id !== loserCardId),
-      deck: (state.deck || []).filter((id) => id !== loserCardId),
+      hand: (state.hand || []).filter((id) => !destroyedCardIds.has(id)),
+      deck: (state.deck || []).filter((id) => !destroyedCardIds.has(id)),
     };
   });
 
@@ -880,7 +1125,21 @@ async function resolveAttack(session, attackerSlotId, targetSlotId, attackerAttr
     updatedAt: getTimestamp(),
   });
 
-  window.alert(`Ataque (${attackerAttribute}) vs defensa (${defenderAttribute}): ${attackerCard.name} (${attackerValue}) vs ${targetCard.name} (${targetValue}). La carta derrotada desapareció del mazo y de la mano.${statPenaltyMessage} El turno pasa al rival.`);
+  const exhaustionNote = attackerDestroyedByExhaustion ? ` ${attackerCard.name} también fue destruida al quedarse sin ${attackerAttribute}.` : '';
+  window.alert(`Ataque (${attackerAttribute}) vs defensa (${defenderAttribute}): ${attackerCard.name} (${attackerValue}) vs ${targetCard.name} (${targetValue}). La carta derrotada desapareció del mazo y de la mano.${statPenaltyMessage}${exhaustionNote} El turno pasa al rival.`);
+}
+
+
+function getBattleCardWithEffectiveStats(session, cardId) {
+  const card = characters.find((entry) => entry.id === cardId);
+  if (!card) return null;
+  return {
+    ...card,
+    strength: getEffectiveStatValue(session, cardId, 'strength') || 0,
+    intelligence: getEffectiveStatValue(session, cardId, 'intelligence') || 0,
+    magic: getEffectiveStatValue(session, cardId, 'magic') || 0,
+    speed: getEffectiveStatValue(session, cardId, 'speed') || 0,
+  };
 }
 
 function renderBattleArena() {
@@ -894,17 +1153,10 @@ function renderBattleArena() {
 
   battleTurnLabel.textContent = myTurn ? 'Es tu turno.' : 'Turno del contrincante.';
   battleHand.innerHTML = myState.hand.map((cardId) => {
-    const card = characters.find((entry) => entry.id === cardId);
+    const card = getBattleCardWithEffectiveStats(session, cardId);
     const selectedClass = selectedHandCardId === cardId ? 'is-picked' : '';
     if (!card) return '';
-    const liveCard = {
-      ...card,
-      strength: getEffectiveStatValue(activeBattleSession, cardId, 'strength') || 0,
-      intelligence: getEffectiveStatValue(activeBattleSession, cardId, 'intelligence') || 0,
-      magic: getEffectiveStatValue(activeBattleSession, cardId, 'magic') || 0,
-      speed: getEffectiveStatValue(activeBattleSession, cardId, 'speed') || 0,
-    };
-    return renderSharedCharacterCard(liveCard, {
+    return renderSharedCharacterCard(card, {
       dataAttribute: 'data-battle-hand-id',
       dataValue: cardId,
       extraClasses: `deck-card battle-hand-card character-size-compact ${selectedClass}`,
@@ -917,12 +1169,13 @@ function renderBattleArena() {
       .filter((slot) => slot.ownerUid === ownerUid)
       .slice(0, 5);
     slotsContainer.innerHTML = slots.map((slot) => {
-      const card = slot.cardId ? characters.find((entry) => entry.id === slot.cardId) : null;
+      const card = slot.cardId ? getBattleCardWithEffectiveStats(session, slot.cardId) : null;
       const hiddenForOpponent = slot.faceDown && !isPlayer;
+      const obscuredForOwner = slot.faceDown && isPlayer;
       const canPlace = isPlayer && !slot.cardId && Boolean(selectedHandCardId) && Boolean(pendingPlacementMode);
       const canInspect = Boolean(slot.cardId);
       const content = slot.cardId
-        ? renderBattleCharacterCard(card, { hidden: hiddenForOpponent })
+        ? renderBattleCharacterCard(card, { hidden: hiddenForOpponent, obscured: obscuredForOwner })
         : '<span class="battle-slot-empty">Vacío</span>';;
       return `<button class="battle-slot ${slot.cardId ? 'occupied' : ''} ${slot.faceDown ? 'facedown' : ''}" data-battle-slot-id="${slot.id}" ${(!canPlace && !canInspect) ? 'disabled' : ''}>${content}</button>`;
     }).join('');
@@ -933,15 +1186,15 @@ function renderBattleArena() {
   battleArenaModal.classList.remove('hidden');
 }
 
-function renderBattleCharacterCard(card, { hidden = false } = {}) {
+function renderBattleCharacterCard(card, { hidden = false, obscured = false } = {}) {
   if (hidden) {
-    return '<span class="battle-facedown-plate" aria-label="Carta boca abajo">◆</span>';
+    return '<span class="battle-facedown-plate" aria-label="Carta boca abajo"></span>';
   }
   if (!card) {
     return '<span class="battle-slot-empty">Carta</span>';
   }
   return renderSharedCharacterCard(card, {
-    extraClasses: 'battle-field-card character-size-compact',
+    extraClasses: `battle-field-card character-size-compact ${obscured ? 'battle-facedown-owner' : ''}`,
     staticCard: true,
   });
 }
@@ -956,13 +1209,33 @@ function hideCardActionModal() {
   battleCardActionModal.classList.add('hidden');
 }
 
+function isDeckBattleReady(deckData) {
+  const characterIds = Array.isArray(deckData?.characterIds) ? deckData.characterIds.filter(Boolean) : [];
+  const mainIds = Array.isArray(deckData?.mainIds) ? deckData.mainIds.filter(Boolean) : [];
+  return characterIds.length === 20 && mainIds.length === 5;
+}
+
 async function createBattleSessionForChallenge(challengeData) {
-  const accepterDeckSnapshot = await userDecksRef.child(challengeData.toUid).once('value');
-  const accepterDeck = (accepterDeckSnapshot.val()?.characterIds) || [];
-  if (accepterDeck.length !== 20) throw new Error('Debes tener mazo de 20 cartas para aceptar.');
-  const challengerDeckSnapshot = await userDecksRef.child(challengeData.fromUid).once('value');
-  const challengerDeck = (challengerDeckSnapshot.val()?.characterIds) || [];
-  if (challengerDeck.length !== 20) throw new Error('El contrincante no tiene mazo válido.');
+  const botAccepterDeck = getBotDeckCharacterIds();
+  const accepterDeckData = isBotUid(challengeData.toUid)
+    ? {
+      characterIds: botAccepterDeck,
+      mainIds: botAccepterDeck.slice(0, 5),
+    }
+    : ((await userDecksRef.child(challengeData.toUid).once('value')).val() || {});
+  if (!isDeckBattleReady(accepterDeckData)) throw new Error('Debes tener mazo de 20 cartas y 5 principales para aceptar.');
+
+  const botChallengerDeck = getBotDeckCharacterIds();
+  const challengerDeckData = isBotUid(challengeData.fromUid)
+    ? {
+      characterIds: botChallengerDeck,
+      mainIds: botChallengerDeck.slice(0, 5),
+    }
+    : ((await userDecksRef.child(challengeData.fromUid).once('value')).val() || {});
+  if (!isDeckBattleReady(challengerDeckData)) throw new Error('El contrincante no tiene mazo válido (20 cartas y 5 principales).');
+
+  const accepterDeck = accepterDeckData.characterIds;
+  const challengerDeck = challengerDeckData.characterIds;
 
   const id = battleSessionsRef.push().key;
   const challengerShuffled = shuffleList(challengerDeck);
@@ -1020,6 +1293,77 @@ async function finishBattleIfPlayerOutOfCards(session) {
   return true;
 }
 
+async function executeBotTurn(session) {
+  if (!session?.id || session.status !== 'active') return;
+  if (session.currentTurnUid !== BOT_UID) return;
+  if (botTurnInFlightSessionId === session.id) return;
+  botTurnInFlightSessionId = session.id;
+
+  try {
+    const botState = getPlayerState(session, BOT_UID);
+    const botSlots = (session.fieldSlots || []).filter((slot) => slot.ownerUid === BOT_UID);
+    const emptyBotSlot = botSlots.find((slot) => !slot.cardId);
+    const attackPlan = getBotPreferredAttack(session, BOT_UID);
+
+    const hasPlacementOption = botState.hand.length && emptyBotSlot;
+    const hasAttackOption = Boolean(attackPlan);
+    const actionPool = [];
+    if (hasPlacementOption) {
+      actionPool.push('place-faceup', 'place-facedown');
+    }
+    if (hasAttackOption) {
+      actionPool.push('attack');
+    }
+
+    const selectedAction = actionPool.length
+      ? actionPool[Math.floor(Math.random() * actionPool.length)]
+      : null;
+
+    if (selectedAction === 'place-faceup' || selectedAction === 'place-facedown') {
+      const cardId = botState.hand[0];
+      const updatedHand = botState.hand.slice(1);
+      const updatedDeck = [...botState.deck];
+      if (updatedDeck.length) updatedHand.push(updatedDeck.shift());
+      const faceDown = selectedAction === 'place-facedown';
+      const fieldSlots = (session.fieldSlots || []).map((slot) => (
+        slot.id === emptyBotSlot.id ? { ...slot, cardId, faceDown } : slot
+      ));
+      const nextTurnUid = session.players.find((uid) => uid !== BOT_UID) || BOT_UID;
+      await battleSessionsRef.child(session.id).update({
+        fieldSlots,
+        currentTurnUid: nextTurnUid,
+        [`playerStates/${BOT_UID}/hand`]: updatedHand,
+        [`playerStates/${BOT_UID}/deck`]: updatedDeck,
+        updatedAt: getTimestamp(),
+      });
+      return;
+    }
+
+    if (selectedAction === 'attack' && attackPlan) {
+      const targetSlot = (session.fieldSlots || []).find((slot) => slot.id === attackPlan.targetSlotId);
+      const defenderAttribute = targetSlot?.faceDown
+        ? battleAttributes[Math.floor(Math.random() * battleAttributes.length)]
+        : attackPlan.attribute;
+      await resolveAttack(
+        session,
+        attackPlan.attackerSlotId,
+        attackPlan.targetSlotId,
+        attackPlan.attribute,
+        defenderAttribute,
+      );
+      return;
+    }
+
+    const nextTurnUid = session.players.find((uid) => uid !== BOT_UID) || BOT_UID;
+    await battleSessionsRef.child(session.id).update({
+      currentTurnUid: nextTurnUid,
+      updatedAt: getTimestamp(),
+    });
+  } finally {
+    botTurnInFlightSessionId = '';
+  }
+}
+
 function closeProfile() {
   activeProfileId = null;
   document.querySelector('.character-profile').classList.add('hidden');
@@ -1052,10 +1396,84 @@ async function deleteCharacter(characterId) {
   }
 }
 
+
+
+
+function getCharacterExperience(characterId) {
+  const experiencePoints = users[currentUserId]?.experiencePoints || {};
+  const cardExperience = experiencePoints.byCharacter?.[characterId] || {};
+  const positive = Number.parseInt(cardExperience.positive ?? '0', 10) || 0;
+  const negative = Number.parseInt(cardExperience.negative ?? '0', 10) || 0;
+  const total = Number.parseInt(cardExperience.total ?? String(positive - negative), 10) || 0;
+  const available = positive + negative;
+  const canSpend = available >= 5;
+  return { positive, negative, total, available, canSpend };
+}
+
+function closeExperienceModal() {
+  if (!experienceModalState) return;
+  experienceModalState.overlay.remove();
+  experienceModalState = null;
+}
+
+function openExperienceModal(character) {
+  closeExperienceModal();
+  const { positive, negative, total, available, canSpend } = getCharacterExperience(character.id);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'challenge-modal';
+  overlay.innerHTML = `
+    <div class="challenge-modal-card">
+      <h3>PUNTOS DE EXPERIENCIA</h3>
+      <p>${escapeHtml(character.name)}</p>
+      <p><strong class="xp-positive">Puntos positivos: +${positive}</strong></p>
+      <p><strong class="xp-negative">Puntos negativos: -${negative}</strong></p>
+      <p><strong>Total acumulado: ${total}</strong></p>
+      <p><strong>Puntos disponibles para desbloquear edición: ${available}/5</strong></p>
+      <p>${canSpend ? "Puedes usar estos puntos para editar atributos ahora." : "Necesitas 5 puntos (positivos+negativos) para habilitar edición."}</p>
+      <div class="challenge-actions">
+        <button class="save-character-btn" data-close-experience-modal type="button">Cerrar</button>
+      </div>
+    </div>
+  `;
+  document.body.append(overlay);
+  experienceModalState = { overlay };
+}
+
+
+function getAvailableTypeEntries() {
+  const historyEntries = Object.values(historyTypesData || {})
+    .map((entry) => ({
+      type: (entry?.name || '').trim(),
+      clans: Object.values(entry?.clans || {})
+        .map((clan) => (clan?.name || '').trim())
+        .filter(Boolean),
+    }))
+    .filter((entry) => entry.type);
+
+  return historyEntries.length ? historyEntries : characterTypes;
+}
+
+function repopulateCreateTypeOptions() {
+  const typeSelect = document.querySelector('#character-type');
+  if (!typeSelect) return;
+
+  const previousValue = typeSelect.value;
+  const typeEntries = getAvailableTypeEntries();
+  typeSelect.innerHTML = '';
+  typeSelect.append(createOption('', 'Selecciona un tipo'));
+  typeEntries.forEach((entry) => typeSelect.append(createOption(entry.type, entry.type)));
+
+  if (typeEntries.some((entry) => entry.type === previousValue)) {
+    typeSelect.value = previousValue;
+  }
+
+  updateClanOptions();
+}
 function updateProfileClanOptions(selectedClan = '') {
   const typeSelect = document.querySelector('#profile-character-type');
   const clanSelect = document.querySelector('#profile-character-clan');
-  const selectedType = characterTypes.find((entry) => entry.type === typeSelect.value);
+  const selectedType = getAvailableTypeEntries().find((entry) => entry.type === typeSelect.value);
 
   clanSelect.innerHTML = '';
   if (!selectedType) {
@@ -1079,16 +1497,39 @@ function updateProfileImagePreview(imageSource) {
   preview.classList.toggle('hidden', !imageSource);
 }
 
+function getCharacterExperienceState(characterId) {
+  const experiencePoints = users[currentUserId]?.experiencePoints || {};
+  const cardExperience = experiencePoints.byCharacter?.[characterId] || {};
+  const positive = Number.parseInt(cardExperience.positive ?? '0', 10) || 0;
+  const negative = Number.parseInt(cardExperience.negative ?? '0', 10) || 0;
+  const total = Number.parseInt(cardExperience.total ?? String(positive - negative), 10) || 0;
+  return { positive, negative, total };
+}
+
+function canEditProfileIdentityByExperience(totalExperience) {
+  return totalExperience > 0 && totalExperience < 5;
+}
+
 function renderProfile(character) {
   const profile = document.querySelector('.character-profile');
+  const developmentProgress = currentUserId ? getCharacterDevelopmentProgress(currentUserId, character) : null;
+  const canOvercapStats = developmentProgress?.status === CHARACTER_DEVELOPMENT_MODE.READY_TO_EDIT;
+  const profileStatMax = canOvercapStats ? 999 : 100;
   const imagePreview = character.image
     ? `<img id="profile-image-preview" class="preview-image" src="${escapeHtml(character.image)}" alt="Imagen actual de ${escapeHtml(character.name)}">`
     : '<img id="profile-image-preview" class="preview-image hidden" alt="Imagen actual del personaje">';
 
   activeProfileId = character.id;
+  const { total: availableExperience } = getCharacterExperienceState(character.id);
+  const canEditIdentityFields = canEditProfileIdentityByExperience(availableExperience);
+  const identityLockMessage = canEditIdentityFields
+    ? ''
+    : '<p class="deck-lock-note">Nombre, Tipo, Clan, Historia e imagen se habilitan al gastar el primer punto de experiencia y se vuelven a bloquear al gastar el último de los 5 puntos.</p>';
+  const events = Object.values(character.events || {}).sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
   profile.innerHTML = `
     <button class="back-to-gallery-btn" type="button">← Volver a personajes</button>
     <form class="profile-form" style="${getTypeColorStyles(character.type)}">
+      ${(() => { const xp = getCharacterExperience(character.id); return `<p class="profile-kicker">${xp.canSpend ? `Edición desbloqueada: reparte +${xp.positive} y -${xp.negative}.` : "Rasgos bloqueados: elimina el personaje o consigue 5 puntos de experiencia."}</p>`; })()}
       <div class="profile-heading">
         <div>
           <p class="profile-kicker">Perfil del personaje</p>
@@ -1100,58 +1541,91 @@ function renderProfile(character) {
         <div class="profile-fields">
           <label>
             Nombre del personaje
-            <input name="name" type="text" required value="${escapeHtml(character.name)}">
+            <input name="name" type="text" required value="${escapeHtml(character.name)}" disabled>
           </label>
           <label>
             Tipo
-            <select id="profile-character-type" name="type" required></select>
+            <select id="profile-character-type" name="type" required disabled></select>
           </label>
           <label>
             Clan
-            <select id="profile-character-clan" name="clan"></select>
+            <select id="profile-character-clan" name="clan" disabled></select>
           </label>
           <div class="stats-grid">
             <label>
               Puntos de magia
-              <input name="magic" type="number" min="1" max="100" required value="${escapeHtml(character.magic)}">
+              <input name="magic" type="number" min="1" max="100" required value="${escapeHtml(character.magic)}" disabled>
             </label>
             <label>
               Puntos de fuerza
-              <input name="strength" type="number" min="1" max="100" required value="${escapeHtml(character.strength)}">
+              <input name="strength" type="number" min="1" max="100" required value="${escapeHtml(character.strength)}" disabled>
             </label>
             <label>
               Puntos de inteligencia
-              <input name="intelligence" type="number" min="1" max="100" required value="${escapeHtml(character.intelligence)}">
+              <input name="intelligence" type="number" min="1" max="100" required value="${escapeHtml(character.intelligence)}" disabled>
             </label>
             <label>
               Puntos de velocidad
-              <input name="speed" type="number" min="1" max="100" required value="${escapeHtml(character.speed)}">
+              <input name="speed" type="number" min="1" max="100" required value="${escapeHtml(character.speed)}" disabled>
             </label>
           </div>
           <label>
             Historia del personaje
-            <textarea name="story" rows="8" required>${escapeHtml(character.story)}</textarea>
+            <textarea name="story" rows="8" required ${canEditIdentityFields ? '' : 'disabled'}>${escapeHtml(character.story)}</textarea>
           </label>
+          ${identityLockMessage}
         </div>
         <aside class="profile-image-panel" aria-label="Imagen del personaje">
           ${imagePreview}
           <input id="profile-image-current" type="hidden" value="${escapeHtml(character.image)}">
           <label>
             URL de imagen de perfil
-            <input id="profile-character-image-url" name="imageUrl" type="url" value="${character.image && !character.image.startsWith('data:') ? escapeHtml(character.image) : ''}" placeholder="https://ejemplo.com/imagen.jpg">
+            <input id="profile-character-image-url" name="imageUrl" type="url" value="${character.image && !character.image.startsWith('data:') ? escapeHtml(character.image) : ''}" placeholder="https://ejemplo.com/imagen.jpg" ${canEditIdentityFields ? '' : 'disabled'}>
           </label>
           <label>
             Reemplazar con imagen del dispositivo
-            <input id="profile-character-image-file" name="imageFile" type="file" accept="image/*">
+            <input id="profile-character-image-file" name="imageFile" type="file" accept="image/*" ${canEditIdentityFields ? '' : 'disabled'}>
           </label>
         </aside>
       </div>
+      <div class="stats-grid xp-adjustments">
+        <label>+ Magia <input name="addMagic" type="number" min="0" value="0"></label>
+        <label>+ Fuerza <input name="addStrength" type="number" min="0" value="0"></label>
+        <label>+ Inteligencia <input name="addIntelligence" type="number" min="0" value="0"></label>
+        <label>+ Velocidad <input name="addSpeed" type="number" min="0" value="0"></label>
+        <label>- Magia <input name="subMagic" type="number" min="0" value="0"></label>
+        <label>- Fuerza <input name="subStrength" type="number" min="0" value="0"></label>
+        <label>- Inteligencia <input name="subIntelligence" type="number" min="0" value="0"></label>
+        <label>- Velocidad <input name="subSpeed" type="number" min="0" value="0"></label>
+      </div>
       <div class="form-actions">
+        ${developmentProgress ? `<p class="deck-lock-note">MODO DESARROLLO DE PERSONAJE: ${developmentProgress.status === CHARACTER_DEVELOPMENT_MODE.PENDING ? 'en espera de la próxima batalla (carta principal única).' : 'resultado aplicado, ahora debes editar atributos.'}</p>` : ''}
+        <button class="save-character-btn" type="button" data-open-experience>PUNTOS DE EXPERIENCIA</button>
+        <button class="save-character-btn" type="button" data-open-events>ACONTECIMIENTOS</button>
         <button class="cancel-character-btn" type="button">Cancelar</button>
         <button class="delete-character-btn" type="button">Eliminar</button>
         <button class="save-character-btn" type="submit">Guardar cambios</button>
       </div>
     </form>
+    <section class="events-panel hidden">
+      <div class="history-section-header">
+        <h3>Acontecimientos</h3>
+        <button class="cancel-character-btn" type="button" data-close-events>Volver al perfil</button>
+      </div>
+      ${events.length ? `<div class="events-grid">${events.map((entry) => `<article class="event-card">
+        <div class="event-thumb">${entry.rivalCardImage ? `<img src="${escapeHtml(entry.rivalCardImage)}" alt="Rival ${escapeHtml(entry.rivalCardName || '')}">` : '<span>Sin imagen</span>'}</div>
+        <span class="event-tag ${entry.isPositive ? 'positive' : 'negative'}">${escapeHtml(entry.tag || '')}</span>
+        <p><strong>Rival:</strong> ${escapeHtml(entry.rivalName || 'Desconocido')}</p>
+        <p><strong>Carta principal rival:</strong> ${escapeHtml(entry.rivalCardName || 'No disponible')}</p>
+        ${entry.locked ? `<p>${escapeHtml(entry.story || 'Sin historia registrada.')}</p>${entry.image ? `<img class="event-story-image" src="${escapeHtml(entry.image)}" alt="Imagen del acontecimiento">` : ''}` : `<form class="event-form" data-event-id="${escapeHtml(entry.id)}">
+          <label>Historia <textarea name="story" rows="4" required placeholder="Redacta la historia...">${escapeHtml(entry.story || '')}</textarea></label>
+          <label>URL de imagen <input name="imageUrl" type="url" value="${escapeHtml(entry.image || '')}" placeholder="https://ejemplo.com/imagen.jpg"></label>
+          <label>o imagen del dispositivo <input name="imageFile" type="file" accept="image/*"></label>
+          <button class="save-character-btn" type="submit">Guardar acontecimiento</button>
+          <p class="deck-lock-note">Una vez guardado no se puede editar ni eliminar.</p>
+        </form>`}
+      </article>`).join('')}</div>` : '<p>Este personaje todavía no tiene acontecimientos.</p>'}
+    </section>
   `;
 
   document.querySelector('.character-gallery').classList.add('hidden');
@@ -1160,13 +1634,48 @@ function renderProfile(character) {
   profile.classList.remove('hidden');
 
   const profileTypeSelect = document.querySelector('#profile-character-type');
-  characterTypes.forEach((entry) => profileTypeSelect.append(createOption(entry.type, entry.type)));
+  getAvailableTypeEntries().forEach((entry) => profileTypeSelect.append(createOption(entry.type, entry.type)));
   profileTypeSelect.value = character.type;
   updateProfileClanOptions(character.clan);
   profileTypeSelect.addEventListener('change', () => updateProfileClanOptions());
 
   document.querySelector('.back-to-gallery-btn').addEventListener('click', closeProfile);
   document.querySelector('.profile-form .cancel-character-btn').addEventListener('click', closeProfile);
+  document.querySelector('[data-open-experience]')?.addEventListener('click', () => openExperienceModal(character));
+  const eventsPanel = profile.querySelector('.events-panel');
+  const profileForm = profile.querySelector('.profile-form');
+  profile.querySelector('[data-open-events]')?.addEventListener('click', () => {
+    profileForm.classList.add('hidden');
+    eventsPanel?.classList.remove('hidden');
+  });
+  profile.querySelector('[data-close-events]')?.addEventListener('click', () => {
+    eventsPanel?.classList.add('hidden');
+    profileForm.classList.remove('hidden');
+  });
+  profile.querySelectorAll('.event-form').forEach((eventForm) => {
+    eventForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const eventId = eventForm.dataset.eventId;
+      const latestCharacter = characters.find((entry) => entry.id === character.id);
+      const currentEvent = latestCharacter?.events?.[eventId];
+      if (!eventId || !currentEvent || currentEvent.locked) return;
+      const formData = new FormData(eventForm);
+      const story = String(formData.get('story') || '').trim();
+      const imageUrl = String(formData.get('imageUrl') || '').trim();
+      if (!story) return;
+      const saveEvent = async (imageValue) => {
+        await getCharacterRef(character.id).child(`events/${eventId}`).update({ story, image: imageValue || '', locked: true, savedAt: getTimestamp() });
+      };
+      const file = formData.get('imageFile');
+      if (file && file.size) {
+        const reader = new FileReader();
+        reader.addEventListener('load', async () => saveEvent(reader.result));
+        reader.readAsDataURL(file);
+      } else {
+        await saveEvent(imageUrl);
+      }
+    });
+  });
   document.querySelector('.profile-form .delete-character-btn').addEventListener('click', () => {
     deleteCharacter(activeProfileId);
   });
@@ -1192,19 +1701,69 @@ function renderProfile(character) {
       return;
     }
 
+    const updatedMagic = Number.parseInt(formData.get('magic'), 10) || 0;
+    const updatedStrength = Number.parseInt(formData.get('strength'), 10) || 0;
+    const updatedIntelligence = Number.parseInt(formData.get('intelligence'), 10) || 0;
+    const updatedSpeed = Number.parseInt(formData.get('speed'), 10) || 0;
+    const previousMagic = Number.parseInt(characterToUpdate.magic, 10) || 0;
+    const previousStrength = Number.parseInt(characterToUpdate.strength, 10) || 0;
+    const previousIntelligence = Number.parseInt(characterToUpdate.intelligence, 10) || 0;
+    const previousSpeed = Number.parseInt(characterToUpdate.speed, 10) || 0;
+    const spentPoints = Math.max(0, updatedMagic - previousMagic)
+      + Math.max(0, updatedStrength - previousStrength)
+      + Math.max(0, updatedIntelligence - previousIntelligence)
+      + Math.max(0, updatedSpeed - previousSpeed);
+    const { total: availablePoints } = getCharacterExperienceState(characterToUpdate.id);
+    if (spentPoints > availablePoints) {
+      setSyncStatus(`No tienes suficientes puntos de experiencia. Disponibles: ${availablePoints}.`, 'error');
+      return;
+    }
+
     try {
+      const xp = getCharacterExperience(characterToUpdate.id);
+      if (!xp.canSpend) {
+        window.alert('Necesitas 5 puntos de experiencia (positivos + negativos) para editar este personaje.');
+        return;
+      }
+      const add = {
+        magic: Number(formData.get('addMagic') || 0),
+        strength: Number(formData.get('addStrength') || 0),
+        intelligence: Number(formData.get('addIntelligence') || 0),
+        speed: Number(formData.get('addSpeed') || 0),
+      };
+      const sub = {
+        magic: Number(formData.get('subMagic') || 0),
+        strength: Number(formData.get('subStrength') || 0),
+        intelligence: Number(formData.get('subIntelligence') || 0),
+        speed: Number(formData.get('subSpeed') || 0),
+      };
+      const addTotal = Object.values(add).reduce((a,b)=>a+b,0);
+      const subTotal = Object.values(sub).reduce((a,b)=>a+b,0);
+      if (addTotal !== xp.positive || subTotal !== xp.negative) {
+        window.alert(`Debes usar exactamente +${xp.positive} y -${xp.negative} puntos.`);
+        return;
+      }
+      const next = {
+        magic: Number(characterToUpdate.magic) + add.magic - sub.magic,
+        strength: Number(characterToUpdate.strength) + add.strength - sub.strength,
+        intelligence: Number(characterToUpdate.intelligence) + add.intelligence - sub.intelligence,
+        speed: Number(characterToUpdate.speed) + add.speed - sub.speed,
+      };
+      if (Object.values(next).some((value) => value < 1 || value > 100)) {
+        window.alert('Los atributos resultantes deben quedar entre 1 y 100.');
+        return;
+      }
       await saveCharacter({
         ...characterToUpdate,
-        name: formData.get('name').trim(),
-        type: formData.get('type'),
-        clan: formData.get('clan'),
-        magic: formData.get('magic'),
-        strength: formData.get('strength'),
-        intelligence: formData.get('intelligence'),
-        speed: formData.get('speed'),
+        magic: String(next.magic),
+        strength: String(next.strength),
+        intelligence: String(next.intelligence),
+        speed: String(next.speed),
         story: formData.get('story').trim(),
         image: profileImage || formData.get('imageUrl').trim(),
+        clan: formData.get('clan'),
       });
+      await usersRef.child(currentUserId).child(`experiencePoints/byCharacter/${characterToUpdate.id}`).set({ positive: 0, negative: 0, total: 0, updatedAt: getTimestamp() });
       closeProfile();
     } catch (error) {
       console.error('No se pudo guardar el personaje en Firebase:', error);
@@ -1223,7 +1782,7 @@ function openProfile(characterId) {
 function updateClanOptions() {
   const typeSelect = document.querySelector('#character-type');
   const clanSelect = document.querySelector('#character-clan');
-  const selectedType = characterTypes.find((entry) => entry.type === typeSelect.value);
+  const selectedType = getAvailableTypeEntries().find((entry) => entry.type === typeSelect.value);
 
   updateTypeColorPreview();
   clanSelect.innerHTML = '';
@@ -1390,7 +1949,7 @@ function createCharacterForm() {
   );
 
   const typeSelect = document.querySelector('#character-type');
-  characterTypes.forEach((entry) => typeSelect.append(createOption(entry.type, entry.type)));
+  repopulateCreateTypeOptions();
   typeSelect.addEventListener('change', updateClanOptions);
 
   document.querySelector('#character-image-url').addEventListener('input', updatePreview);
@@ -1695,6 +2254,7 @@ usersRef.on('value', (snapshot) => {
 historyTypesRef.on('value', (snapshot) => {
   historyTypesData = normalizeHistoryTypes(snapshot.val() || {});
   renderHistoryTypes();
+  repopulateCreateTypeOptions();
 });
 
 battleHistoryRef.on('value', (snapshot) => {
@@ -1773,6 +2333,17 @@ function hideAttributePicker() {
 }
 
 document.addEventListener('click', (event) => {
+  const closeExperienceButton = event.target.closest('[data-close-experience-modal]');
+  if (closeExperienceButton) {
+    closeExperienceModal();
+    return;
+  }
+
+  if (experienceModalState && event.target === experienceModalState.overlay) {
+    closeExperienceModal();
+    return;
+  }
+
   const deckCard = event.target.closest('[data-deck-character-id]');
   if (deckCard && currentUserId) {
     const characterId = deckCard.dataset.deckCharacterId;
@@ -1822,9 +2393,19 @@ document.addEventListener('click', (event) => {
       return;
     }
 
-    const hasDeckReady = savedDeck.characterIds.length === 20;
+    const hasDeckReady = savedDeck.characterIds.length === 20 && savedDeck.mainIds.length === 5;
     if (!hasDeckReady) {
-      window.alert('Debes guardar un mazo de 20 personajes antes de retar.');
+      window.alert('Debes tener un mazo de 20 personajes y elegir 5 principales antes de retar.');
+      return;
+    }
+
+    if (isBotUid(challengedUid)) {
+      createBattleSessionForChallenge({
+        fromUid: currentUserId,
+        fromName: users[currentUserId]?.name || userName.textContent || 'Usuario',
+        toUid: BOT_UID,
+        toName: BOT_NAME,
+      }).catch((error) => console.error('No se pudo iniciar batalla contra el BOT:', error));
       return;
     }
 
@@ -1874,7 +2455,7 @@ document.addEventListener('click', (event) => {
   }
 
   if (clickedSlot.ownerUid === currentUserId) {
-    const attackerCard = characters.find((entry) => entry.id === clickedSlot.cardId);
+    const attackerCard = getBattleCardWithEffectiveStats(session, clickedSlot.cardId);
     if (!attackerCard) return;
     openAttributePicker('attack', attackerCard, (selectedAttribute) => {
       pendingAttack = { attackerSlotId: clickedSlot.id, attribute: selectedAttribute };
@@ -1946,20 +2527,42 @@ battleSessionsRef.on('value', (snapshot) => {
   finishBattleIfPlayerOutOfCards(current).catch((error) => {
     console.error('No se pudo finalizar la batalla por falta de cartas:', error);
   });
+  if (current.currentTurnUid === BOT_UID) {
+    executeBotTurn(current).catch((error) => {
+      console.error('No se pudo ejecutar turno del BOT:', error);
+    });
+  }
   const previousBattleId = activeBattleSession?.id;
   activeBattleSession = current;
   if (previousBattleId !== current.id) {
     battleArenaDismissed = true;
   }
-  if (!battleArenaDismissed) {
+  if (!battleArenaDismissed || current.currentTurnUid === BOT_UID || current.pendingDefense) {
+    battleArenaDismissed = false;
     renderBattleArena();
   } else {
     battleArenaModal.classList.add('hidden');
   }
   const pendingDefenseData = current.pendingDefense;
+  if (pendingDefenseData?.defenderUid === BOT_UID) {
+    const defenderSlot = (current.fieldSlots || []).find((slot) => slot.id === pendingDefenseData.targetSlotId);
+    if (defenderSlot?.cardId) {
+      const bestDefenseAttribute = getHighestAttributeForCard(current, defenderSlot.cardId);
+      resolveAttack(
+        current,
+        pendingDefenseData.attackerSlotId,
+        pendingDefenseData.targetSlotId,
+        pendingDefenseData.attackerAttribute,
+        bestDefenseAttribute,
+      ).catch((error) => console.error('No se pudo resolver defensa automática del BOT:', error));
+    }
+    renderOnlineUsers();
+    renderDeckBuilder();
+    return;
+  }
   if (pendingDefenseData?.defenderUid === currentUserId) {
     const defenderSlot = (current.fieldSlots || []).find((slot) => slot.id === pendingDefenseData.targetSlotId);
-    const defenderCard = defenderSlot?.cardId ? characters.find((entry) => entry.id === defenderSlot.cardId) : null;
+    const defenderCard = defenderSlot?.cardId ? getBattleCardWithEffectiveStats(current, defenderSlot.cardId) : null;
     if (defenderCard) {
       openAttributePicker('defense', defenderCard, (defenseAttribute) => {
         resolveAttack(
